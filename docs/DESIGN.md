@@ -119,11 +119,53 @@ class SerializerAdapter(Protocol):
 | Channel 类型 | 命名模式 | 用途 | 访问权限 |
 |-------------|----------|------|----------|
 | History | `history:{agent_id}` | 对话/工作记录 | 私有，SDK 自动写入 |
-| Notebook | `notebook:{agent_id}` | scratch pad / thoughts | 私有，agent 主动写 |
-| Memory | `memory:{agent_id}` | 长期记忆 | 私有 |
+| Notebook | `notebook:{agent_id}` | scratch pad / thoughts（含 Thought） | 私有，agent 主动写 |
+| Memory | `memory:{agent_id}` | 长期记忆（Semantic） | 私有 |
 | Broadcast | `broadcast:{topic}` | 公告、任务列表、成员列表 | 公开只读 |
 | Group | `group:{group_id}` | 群聊 | 成员可读写 |
 | DM | `dm:{agent_a}:{agent_b}` | 私聊 | 双方可读写 |
+
+### 认知心理学视角：Notebook vs Memory
+
+基于认知心理学的记忆分类，我们设计了两个核心的私有 channel：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Agent 认知系统                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────────────────┐      ┌─────────────────────┐       │
+│  │  Notebook Channel   │      │   Memory Channel    │       │
+│  │  (Episodic/Working) │      │    (Semantic/LTM)   │       │
+│  ├─────────────────────┤      ├─────────────────────┤       │
+│  │ • Note (普通笔记)    │      │ • Memory (结论/知识) │       │
+│  │ • Thought (思考过程) │ ───▶ │   - fact            │       │
+│  │   - reasoning       │ 提炼  │   - experience      │       │
+│  │   - planning        │      │   - decision        │       │
+│  │   - reflection      │      │   - preference      │       │
+│  │   - brainstorming   │      │                     │       │
+│  ├─────────────────────┤      ├─────────────────────┤       │
+│  │ 性质：过程性、临时    │      │ 性质：结果性、持久   │       │
+│  │ TTL：可自动过期      │      │ TTL：长期保留       │       │
+│  │ 类比：草稿纸         │      │ 类比：知识库        │       │
+│  └─────────────────────┘      └─────────────────────┘       │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| 维度 | Notebook (Episodic) | Memory (Semantic) |
+|------|---------------------|-------------------|
+| **记忆类型** | 情景记忆 / 工作记忆 | 语义记忆 / 长期记忆 |
+| **内容** | 思考过程、临时笔记、草稿 | 提炼的结论、事实、知识 |
+| **结构** | 可以是杂乱的思维流 | 应该是结构化、简洁的 |
+| **时效性** | 可丢弃、可自动过期 | 持久保留 |
+| **用途** | 调试、白盒化、复盘 | 未来召回、知识复用 |
+| **类比** | 草稿纸上的演算 | 整理后的笔记本 |
+
+**设计决策**：Thought 存储在 Notebook channel 中，因为：
+1. Notebook 的设计初衷就是 "scratch pad / thoughts"
+2. Thought 和 Note 都是临时性、过程性内容
+3. 通过消息类型（Note vs Thought）区分即可
 
 ### Broadcast Channel 管理
 
@@ -201,9 +243,27 @@ class Thought:
     agent_id: str
 ```
 
-**与 Memory 的关系**：
-- **Thought**：记录思考过程（过程性），可以是长且杂乱的
-- **Memory**：记录结论/知识（结果性），应该是简洁结构化的
+**存储位置**：Notebook channel（`notebook:{agent_id}`）
+
+**与其他类型的关系**：
+
+| 类型 | 存储位置 | 性质 | 说明 |
+|------|----------|------|------|
+| **Note** | Notebook | Episodic | 普通笔记、临时记录 |
+| **Thought** | Notebook | Episodic | 结构化思考过程（CoT 持久化）|
+| **Memory** | Memory | Semantic | 提炼的结论、事实、知识 |
+
+**典型工作流**：
+
+```
+[思考过程] ──record_thought()──▶ Notebook Channel
+     │                              (episodic)
+     │
+     ▼ 模型自己总结/提炼
+     │
+[得出结论] ──store_memory()──▶ Memory Channel
+                                (semantic)
+```
 
 ---
 
@@ -227,20 +287,23 @@ send_dm(to_agent: str, content: str) -> MessageId
 read_channel(channel: str, limit: int = 10) -> List[Message]
 read_dm(with_agent: str, limit: int = 10) -> List[Message]
 
-# ===== Notebook 操作 =====
+# ===== Notebook 操作（Episodic/Working Memory）=====
 write_note(content: str, tags: List[str] = None) -> NoteId
 read_notes(tags: List[str] = None, limit: int = 10) -> List[Note]
 
-# ===== Memory 操作 =====
-store_memory(content: str, type: str = "general") -> MemoryId
-recall_memory(query: str, limit: int = 5) -> List[Memory]
-
-# ===== Thought 操作（借鉴 ThinkTool） =====
+# Thought 也存储在 Notebook channel（结构化的 Note）
 record_thought(
     thinking_mode: str,  # reasoning | planning | reflection | recalling | ...
     focus_area: str,
     thought_process: str
-) -> ThoughtId
+) -> ThoughtId  # 底层写入 notebook:{agent_id}
+
+read_thoughts(limit: int = 10) -> List[Thought]
+
+# ===== Memory 操作（Semantic/Long-term Memory）=====
+store_memory(content: str, type: str = "general") -> MemoryId
+# type: general | fact | experience | decision | preference | ...
+recall_memory(query: str, limit: int = 5) -> List[Memory]
 
 # ===== 通知 =====
 check_notifications() -> List[Notification]
