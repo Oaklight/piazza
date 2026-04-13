@@ -5,13 +5,26 @@ PACKAGE_NAME := piazza
 DIST_DIR := dist
 
 # Default target
-all: lint test build
+all: format lint test
+
+# ──────────────────────────────────────────────
+# Formatting
+# ──────────────────────────────────────────────
+
+format:
+	@echo "Running ruff check --fix..."
+	ruff check --fix src/ tests/
+	@echo "Running ruff format..."
+	ruff format src/ tests/
+	@echo "Format complete."
 
 # ──────────────────────────────────────────────
 # Linting & Type Checking
 # ──────────────────────────────────────────────
 
 lint:
+	@echo "Running ruff check..."
+	ruff check src/
 	@echo "Running ty check..."
 	ty check
 	@echo "Type check complete."
@@ -41,14 +54,15 @@ push:
 
 clean:
 	@echo "Cleaning up build and distribution files..."
-	rm -rf $(DIST_DIR) *.egg-info
+	rm -rf $(DIST_DIR) *.egg-info src/*.egg-info
 	@echo "Cleanup complete."
 
 help:
 	@echo "Available targets:"
 	@echo ""
 	@echo "Development:"
-	@echo "  lint    - Run ty type checker"
+	@echo "  format  - Run ruff check --fix and ruff format"
+	@echo "  lint    - Run ruff check and ty type checker"
 	@echo "  test    - Run tests with pytest"
 	@echo ""
 	@echo "Package targets:"
@@ -57,6 +71,6 @@ help:
 	@echo "  clean   - Clean up build and distribution files"
 	@echo ""
 	@echo "Composite targets:"
-	@echo "  all     - Run lint, test, and build (default)"
+	@echo "  all     - Run format, lint, and test (default)"
 
-.PHONY: all lint test build push clean help
+.PHONY: all format lint test build push clean help

@@ -2,30 +2,46 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from piazza.serializers import JSONSerializer
 from piazza.storage import SQLiteStorage
 from piazza.types import Message, Serializer, StorageBackend
+
+# Thread-safe monotonic sequence for _uuid7 fallback
+_seq_lock = threading.Lock()
+_seq_last_ms = 0
+_seq_counter = 0
 
 
 def _uuid7() -> str:
     """Generate a UUID v7 (time-ordered) as string.
 
     Falls back to a time-sortable synthetic ID on Python < 3.14.
+    Uses a per-millisecond sequence counter to guarantee strict
+    lexicographic ordering even within the same millisecond.
     """
     try:
         return str(uuid.uuid7())
     except AttributeError:
-        # Pre-3.14: synthesize a time-sortable ID
+        global _seq_last_ms, _seq_counter  # noqa: PLW0603
         ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        with _seq_lock:
+            if ts_ms == _seq_last_ms:
+                _seq_counter += 1
+            else:
+                _seq_last_ms = ts_ms
+                _seq_counter = 0
+            seq = _seq_counter
         ts_hex = f"{ts_ms:012x}"
-        rand = uuid.uuid4().hex[12:]
-        return f"{ts_hex[:8]}-{ts_hex[8:12]}-7{rand[:3]}-{rand[3:7]}-{rand[7:19]}"
+        seq_hex = f"{seq:04x}"
+        rand = uuid.uuid4().hex[16:]
+        return f"{ts_hex[:8]}-{ts_hex[8:12]}-7{seq_hex[:3]}-{seq_hex[3]}{rand[:3]}-{rand[3:15]}"
 
 
 def _now_iso() -> str:

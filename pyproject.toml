@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "piazza"
-version = "0.0.1a999"
+dynamic = ["version"]
 authors = [{ name = "Oaklight", email = "oaklight@gmx.com" }]
 description = "Agent messaging hub for multi-agent collaboration."
 readme = "README.md"
@@ -27,5 +27,26 @@ dependencies = []
 Repository = "https://github.com/Oaklight/piazza"
 Issues = "https://github.com/Oaklight/piazza/issues"
 
+[tool.setuptools.dynamic]
+version = { attr = "piazza.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11.0",
+    "build>=1.2.0",
+    "twine>=6.1.0",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]

@@ -1,0 +1,10 @@
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.piazza.db
+*.db-wal
+*.db-shm
+site/
+_build/
+.pytest_cache/
