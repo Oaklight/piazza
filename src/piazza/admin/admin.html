@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piazza Admin</title>
+<style>
+/* ============== CSS Variables ============== */
+:root {
+    --bg-primary: #FAF9F7;
+    --bg-secondary: #FFFFFF;
+    --text-primary: #1B1B18;
+    --text-secondary: #81807C;
+    --accent: #2B8A7E;
+    --accent-hover: #237A6F;
+    --accent-light: rgba(43, 138, 126, 0.08);
+    --border: #E8E5E0;
+    --success: #3D8B5F;
+    --error: #C44141;
+    --warning: #C2922E;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.08);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --transition: all 0.2s ease;
+}
+
+/* ============== Reset & Base ============== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+}
+
+/* ============== Layout ============== */
+.app { max-width: 1200px; margin: 0 auto; padding: 16px 24px; }
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+}
+.header-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.header-logo svg { color: var(--accent); }
+.header-spacer { flex: 1; }
+.status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--error);
+    transition: var(--transition);
+}
+.status-dot.connected { background: var(--success); }
+.status-label { font-size: 0.75rem; color: var(--text-secondary); }
+
+/* ============== Tabs ============== */
+.tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+}
+.tab-btn {
+    padding: 10px 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: var(--transition);
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ============== Stat Cards ============== */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    box-shadow: var(--shadow-sm);
+}
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* ============== Chart ============== */
+.chart-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+}
+.chart-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+}
+.chart-canvas { width: 100%; height: 160px; }
+
+/* ============== Tables ============== */
+.table-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 24px;
+}
+.table-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    padding: 16px 20px 0;
+    color: var(--text-primary);
+}
+table { width: 100%; border-collapse: collapse; }
+th {
+    text-align: left;
+    padding: 12px 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+}
+td {
+    padding: 12px 20px;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--border);
+}
+tr:last-child td { border-bottom: none; }
+tr:hover { background: var(--accent-light); }
+.clickable { cursor: pointer; }
+
+/* ============== Channel Detail ============== */
+.channel-detail {
+    display: none;
+    background: var(--bg-primary);
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+.channel-detail.visible { display: block; }
+.detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+.detail-section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: var(--accent-light);
+    color: var(--accent);
+    margin: 2px 4px 2px 0;
+}
+.badge-count {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+
+/* ============== Messages ============== */
+.filter-bar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.filter-bar select, .filter-bar input {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    outline: none;
+    transition: var(--transition);
+}
+.filter-bar select:focus, .filter-bar input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-light);
+}
+.message-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    min-height: 300px;
+    max-height: 600px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+}
+.message-empty {
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 40px;
+    font-size: 0.875rem;
+}
+
+/* ============== Chat Bubbles ============== */
+.bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    position: relative;
+}
+.bubble-left {
+    align-self: flex-start;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+}
+.bubble-right {
+    align-self: flex-end;
+    background: var(--accent-light);
+    border: 1px solid var(--accent);
+    border-bottom-right-radius: 4px;
+}
+.bubble-sender {
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.bubble-payload {
+    font-size: 0.875rem;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+.bubble-payload-expand {
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.75rem;
+    margin-top: 4px;
+}
+.bubble-payload-full {
+    display: none;
+    margin-top: 8px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    overflow-y: auto;
+}
+.bubble-payload-full.visible { display: block; }
+.bubble-meta {
+    font-size: 0.6875rem;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.msg-type-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+/* ============== Publish Form ============== */
+.publish-section {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+.publish-header {
+    padding: 12px 20px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+}
+.publish-header:hover { background: var(--accent-light); }
+.publish-body { display: none; padding: 16px 20px; }
+.publish-body.visible { display: block; }
+.form-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.form-group { flex: 1; }
+.form-group label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.form-group input, .form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-family: inherit;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+    transition: var(--transition);
+}
+.form-group input:focus, .form-group textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-light);
+}
+.form-group textarea { min-height: 80px; resize: vertical; }
+
+/* ============== Buttons ============== */
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.btn-primary {
+    background: var(--accent);
+    color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+}
+.btn-secondary:hover { background: var(--accent-light); }
+.btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ============== Subscriptions ============== */
+.sub-total {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+/* ============== Toast ============== */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.toast {
+    padding: 12px 20px;
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    box-shadow: var(--shadow-lg);
+    animation: slideIn 0.3s ease;
+    max-width: 400px;
+}
+.toast-success { background: var(--success); color: #fff; }
+.toast-error { background: var(--error); color: #fff; }
+.toast-info { background: var(--accent); color: #fff; }
+@keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
+
+/* ============== Responsive ============== */
+@media (max-width: 768px) {
+    .app { padding: 12px 16px; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .filter-bar { flex-direction: column; }
+    .form-row { flex-direction: column; gap: 8px; }
+    .detail-grid { grid-template-columns: 1fr; }
+    .bubble { max-width: 90%; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            Piazza Admin
+        </div>
+        <div class="header-spacer"></div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-label" id="statusLabel">Connecting...</span>
+        </div>
+        <button class="btn btn-secondary btn-sm btn-icon" onclick="refreshCurrentTab()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Refresh
+        </button>
+    </header>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('dashboard')">Dashboard</button>
+        <button class="tab-btn" onclick="switchTab('channels')">Channels</button>
+        <button class="tab-btn" onclick="switchTab('messages')">Messages</button>
+        <button class="tab-btn" onclick="switchTab('subscriptions')">Subscriptions</button>
+    </div>
+
+    <!-- Dashboard Tab -->
+    <div class="tab-content active" id="tab-dashboard">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Messages</div>
+                <div class="stat-value" id="statMessages">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Channels</div>
+                <div class="stat-value" id="statChannels">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Senders</div>
+                <div class="stat-value" id="statSenders">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Subscriptions</div>
+                <div class="stat-value" id="statSubs">-</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-title">Throughput (messages/sec, last 60s)</div>
+            <canvas class="chart-canvas" id="throughputChart"></canvas>
+        </div>
+
+        <div class="table-container">
+            <div class="table-title" style="padding-bottom:8px;">Channel Breakdown</div>
+            <table>
+                <thead><tr>
+                    <th>Channel</th><th>Messages</th><th>Senders</th><th>Last Message</th>
+                </tr></thead>
+                <tbody id="channelBreakdown"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Channels Tab -->
+    <div class="tab-content" id="tab-channels">
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th></th><th>Channel</th><th>Messages</th><th>Senders</th><th>Subscriptions</th><th>Last Message</th>
+                </tr></thead>
+                <tbody id="channelList"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Messages Tab -->
+    <div class="tab-content" id="tab-messages">
+        <div class="filter-bar">
+            <select id="msgChannel" onchange="loadMessages()">
+                <option value="">Select channel...</option>
+            </select>
+            <input id="msgSender" type="text" placeholder="Filter sender..." style="max-width:160px" onchange="loadMessages()">
+            <input id="msgType" type="text" placeholder="Filter msg_type..." style="max-width:160px" onchange="loadMessages()">
+            <button class="btn btn-secondary btn-sm" onclick="loadMessages()">Apply</button>
+            <div class="header-spacer"></div>
+            <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="msgAutoRefresh" checked> Auto-refresh
+            </label>
+        </div>
+
+        <div class="message-container" id="messageContainer">
+            <div class="message-empty">Select a channel to view messages</div>
+        </div>
+
+        <div class="publish-section">
+            <div class="publish-header" onclick="togglePublish()">
+                <span>Publish Message</span>
+                <svg id="publishChevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform 0.2s">
+                    <polyline points="6 9 12 15 18 9"/>
+                </svg>
+            </div>
+            <div class="publish-body" id="publishBody">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Channel</label>
+                        <input id="pubChannel" type="text" placeholder="channel-name">
+                    </div>
+                    <div class="form-group">
+                        <label>Sender</label>
+                        <input id="pubSender" type="text" placeholder="admin-panel" value="admin-panel">
+                    </div>
+                    <div class="form-group">
+                        <label>Message Type</label>
+                        <input id="pubMsgType" type="text" placeholder="text" value="text">
+                    </div>
+                </div>
+                <div class="form-group" style="margin-bottom:12px">
+                    <label>Payload</label>
+                    <textarea id="pubPayload" placeholder="Message content..."></textarea>
+                </div>
+                <div class="form-group" style="margin-bottom:12px">
+                    <label>Metadata (JSON, optional)</label>
+                    <textarea id="pubMetadata" placeholder='{"key": "value"}' style="min-height:40px"></textarea>
+                </div>
+                <button class="btn btn-primary" onclick="publishMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subscriptions Tab -->
+    <div class="tab-content" id="tab-subscriptions">
+        <div class="sub-total" id="subTotal">Loading...</div>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>Channel</th><th>Subscription IDs</th><th>Count</th>
+                </tr></thead>
+                <tbody id="subList"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+/* ============== API Client ============== */
+class PiazzaAPI {
+    constructor() {
+        this.baseUrl = window.location.origin;
+        this.token = localStorage.getItem('piazza_token') || null;
+    }
+
+    getHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        if (this.token) headers['Authorization'] = 'Bearer ' + this.token;
+        return headers;
+    }
+
+    async request(path, options = {}) {
+        try {
+            const resp = await fetch(this.baseUrl + path, {
+                headers: this.getHeaders(),
+                ...options,
+            });
+            if (resp.status === 401) {
+                const token = prompt('Enter authentication token:');
+                if (token) {
+                    this.token = token;
+                    localStorage.setItem('piazza_token', token);
+                    return this.request(path, options);
+                }
+                throw new Error('Authentication required');
+            }
+            updateStatus(true);
+            return resp.json();
+        } catch (e) {
+            if (e.message !== 'Authentication required') {
+                updateStatus(false);
+            }
+            throw e;
+        }
+    }
+
+    async getStats() { return this.request('/api/stats'); }
+    async getThroughput() { return this.request('/api/stats/throughput'); }
+    async getChannels() { return this.request('/api/channels'); }
+    async getChannel(name) { return this.request('/api/channels/' + encodeURIComponent(name)); }
+    async getMessages(params) {
+        const q = new URLSearchParams();
+        for (const [k, v] of Object.entries(params)) {
+            if (v !== null && v !== undefined && v !== '') q.set(k, v);
+        }
+        return this.request('/api/messages?' + q.toString());
+    }
+    async publishMessage(data) {
+        return this.request('/api/messages', { method: 'POST', body: JSON.stringify(data) });
+    }
+    async getSubscriptions() { return this.request('/api/subscriptions'); }
+}
+
+const api = new PiazzaAPI();
+let currentTab = 'dashboard';
+let refreshInterval = null;
+let lastMessageId = null;
+
+// Sender color map
+const senderColors = {};
+const colorPalette = [
+    '#2B8A7E','#C2922E','#7C3AED','#DB2777','#2563EB',
+    '#D97706','#059669','#DC2626','#7C3AED','#9333EA',
+];
+function getSenderColor(sender) {
+    if (!senderColors[sender]) {
+        const idx = Object.keys(senderColors).length % colorPalette.length;
+        senderColors[sender] = colorPalette[idx];
+    }
+    return senderColors[sender];
+}
+
+/* ============== Status ============== */
+function updateStatus(connected) {
+    const dot = document.getElementById('statusDot');
+    const label = document.getElementById('statusLabel');
+    if (connected) {
+        dot.classList.add('connected');
+        label.textContent = 'Connected';
+    } else {
+        dot.classList.remove('connected');
+        label.textContent = 'Disconnected';
+    }
+}
+
+/* ============== Tabs ============== */
+function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.toLowerCase() === tab);
+    });
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+
+    if (refreshInterval) clearInterval(refreshInterval);
+    refreshCurrentTab();
+    refreshInterval = setInterval(refreshCurrentTab, 3000);
+}
+
+function refreshCurrentTab() {
+    switch (currentTab) {
+        case 'dashboard': loadDashboard(); break;
+        case 'channels': loadChannels(); break;
+        case 'messages':
+            if (document.getElementById('msgAutoRefresh').checked) loadMessages();
+            break;
+        case 'subscriptions': loadSubscriptions(); break;
+    }
+}
+
+/* ============== Dashboard ============== */
+async function loadDashboard() {
+    try {
+        const [stats, tp] = await Promise.all([api.getStats(), api.getThroughput()]);
+
+        document.getElementById('statMessages').textContent = stats.total_messages.toLocaleString();
+        document.getElementById('statChannels').textContent = stats.total_channels;
+        document.getElementById('statSenders').textContent = stats.total_senders;
+        document.getElementById('statSubs').textContent = stats.active_subscriptions;
+
+        // Channel breakdown table
+        const tbody = document.getElementById('channelBreakdown');
+        tbody.innerHTML = stats.channel_breakdown.map(ch => `
+            <tr>
+                <td><strong>${esc(ch.channel)}</strong></td>
+                <td>${ch.message_count.toLocaleString()}</td>
+                <td>${ch.sender_count}</td>
+                <td style="color:var(--text-secondary);font-size:0.8rem">${formatTime(ch.last_message_time)}</td>
+            </tr>
+        `).join('');
+
+        // Throughput chart
+        drawThroughputChart(tp.buckets);
+    } catch (e) {
+        console.error('Dashboard load error:', e);
+    }
+}
+
+/* ============== Throughput Chart ============== */
+function drawThroughputChart(buckets) {
+    const canvas = document.getElementById('throughputChart');
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    const W = rect.width;
+    const H = rect.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    const counts = buckets.map(b => b.count);
+    const maxCount = Math.max(...counts, 1);
+
+    const padLeft = 40, padRight = 10, padTop = 10, padBottom = 24;
+    const chartW = W - padLeft - padRight;
+    const chartH = H - padTop - padBottom;
+
+    // Grid lines
+    ctx.strokeStyle = '#E8E5E0';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = padTop + (chartH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(W - padRight, y);
+        ctx.stroke();
+
+        ctx.fillStyle = '#81807C';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'right';
+        const val = Math.round(maxCount * (1 - i / 4));
+        ctx.fillText(val.toString(), padLeft - 6, y + 3);
+    }
+
+    // X-axis labels
+    ctx.fillStyle = '#81807C';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < 60; i += 10) {
+        const x = padLeft + (i / 59) * chartW;
+        ctx.fillText((60 - i) + 's', x, H - 4);
+    }
+    ctx.fillText('now', padLeft + chartW, H - 4);
+
+    // Line
+    ctx.strokeStyle = '#2B8A7E';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < counts.length; i++) {
+        const x = padLeft + (i / (counts.length - 1)) * chartW;
+        const y = padTop + chartH - (counts[i] / maxCount) * chartH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Fill area
+    ctx.lineTo(padLeft + chartW, padTop + chartH);
+    ctx.lineTo(padLeft, padTop + chartH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(43, 138, 126, 0.08)';
+    ctx.fill();
+}
+
+/* ============== Channels Tab ============== */
+async function loadChannels() {
+    try {
+        const data = await api.getChannels();
+        const tbody = document.getElementById('channelList');
+        tbody.innerHTML = data.channels.map(ch => `
+            <tr class="clickable" onclick="toggleChannelDetail('${esc(ch.name)}', this)">
+                <td style="width:30px">
+                    <svg class="ch-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s">
+                        <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                </td>
+                <td><strong>${esc(ch.name)}</strong></td>
+                <td>${ch.message_count.toLocaleString()}</td>
+                <td>${ch.sender_count}</td>
+                <td>${ch.subscription_count}</td>
+                <td style="color:var(--text-secondary);font-size:0.8rem">${formatTime(ch.last_message_time)}</td>
+            </tr>
+            <tr class="ch-detail-row" id="ch-detail-${esc(ch.name)}" style="display:none">
+                <td colspan="6">
+                    <div class="channel-detail visible" id="ch-detail-content-${esc(ch.name)}">
+                        <div style="color:var(--text-secondary);font-size:0.8rem">Loading...</div>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Channels load error:', e);
+    }
+}
+
+async function toggleChannelDetail(name, row) {
+    const detailRow = document.getElementById('ch-detail-' + name);
+    const chevron = row.querySelector('.ch-chevron');
+    if (detailRow.style.display === 'none') {
+        detailRow.style.display = 'table-row';
+        chevron.style.transform = 'rotate(90deg)';
+        try {
+            const ch = await api.getChannel(name);
+            const content = document.getElementById('ch-detail-content-' + name);
+            content.innerHTML = `
+                <div class="detail-grid">
+                    <div>
+                        <div class="detail-section-title">Senders</div>
+                        <div>${ch.senders.map(s => `<span class="badge">${esc(s)}</span>`).join('')}</div>
+                    </div>
+                    <div>
+                        <div class="detail-section-title">Message Types</div>
+                        <div>${ch.msg_types.map(t => `<span class="badge">${esc(t.msg_type)}</span> <span class="badge badge-count">${t.count}</span> `).join('')}</div>
+                    </div>
+                </div>
+            `;
+        } catch (e) {
+            console.error('Channel detail error:', e);
+        }
+    } else {
+        detailRow.style.display = 'none';
+        chevron.style.transform = 'rotate(0deg)';
+    }
+}
+
+/* ============== Messages Tab ============== */
+async function loadMessages() {
+    const channel = document.getElementById('msgChannel').value;
+    if (!channel) return;
+
+    const sender = document.getElementById('msgSender').value;
+    const msgType = document.getElementById('msgType').value;
+
+    try {
+        const data = await api.getMessages({
+            channel,
+            sender: sender || null,
+            msg_type: msgType || null,
+            limit: 200,
+        });
+
+        const container = document.getElementById('messageContainer');
+        if (data.messages.length === 0) {
+            container.innerHTML = '<div class="message-empty">No messages in this channel</div>';
+            return;
+        }
+
+        container.innerHTML = data.messages.map((m, i) => {
+            const color = getSenderColor(m.sender);
+            const isLong = m.payload.length > 200;
+            let isJson = false;
+            let formattedPayload = '';
+            try {
+                const parsed = JSON.parse(m.payload);
+                formattedPayload = JSON.stringify(parsed, null, 2);
+                isJson = true;
+            } catch(e) {}
+
+            const displayPayload = isLong ? m.payload.substring(0, 200) + '...' : m.payload;
+            const showExpand = isLong || isJson;
+
+            return `
+                <div class="bubble bubble-left">
+                    <div class="bubble-sender" style="color:${color}">${esc(m.sender)}</div>
+                    <div class="bubble-payload">${esc(displayPayload)}</div>
+                    ${showExpand ? `
+                        <div class="bubble-payload-expand" onclick="togglePayload(${i})">
+                            ${isJson ? 'Show JSON' : 'Show full'}
+                        </div>
+                        <div class="bubble-payload-full" id="payload-${i}">${esc(isJson ? formattedPayload : m.payload)}</div>
+                    ` : ''}
+                    <div class="bubble-meta">
+                        <span class="msg-type-badge">${esc(m.msg_type)}</span>
+                        <span>${formatTime(m.timestamp)}</span>
+                        ${m.metadata ? `<span title="${esc(JSON.stringify(m.metadata))}">+meta</span>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        // Scroll to bottom
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {
+        console.error('Messages load error:', e);
+    }
+}
+
+function togglePayload(index) {
+    const el = document.getElementById('payload-' + index);
+    el.classList.toggle('visible');
+}
+
+async function populateChannelSelector() {
+    try {
+        const data = await api.getChannels();
+        const select = document.getElementById('msgChannel');
+        const current = select.value;
+        const opts = '<option value="">Select channel...</option>' +
+            data.channels.map(ch => `<option value="${esc(ch.name)}" ${ch.name === current ? 'selected' : ''}>${esc(ch.name)} (${ch.message_count})</option>`).join('');
+        select.innerHTML = opts;
+    } catch (e) {
+        console.error('Channel selector error:', e);
+    }
+}
+
+/* ============== Publish ============== */
+function togglePublish() {
+    const body = document.getElementById('publishBody');
+    const chevron = document.getElementById('publishChevron');
+    body.classList.toggle('visible');
+    chevron.style.transform = body.classList.contains('visible') ? 'rotate(180deg)' : 'rotate(0deg)';
+
+    // Pre-fill channel from selector
+    if (body.classList.contains('visible')) {
+        const ch = document.getElementById('msgChannel').value;
+        if (ch) document.getElementById('pubChannel').value = ch;
+    }
+}
+
+async function publishMessage() {
+    const channel = document.getElementById('pubChannel').value.trim();
+    const sender = document.getElementById('pubSender').value.trim();
+    const msgType = document.getElementById('pubMsgType').value.trim();
+    const payload = document.getElementById('pubPayload').value;
+    const metaStr = document.getElementById('pubMetadata').value.trim();
+
+    if (!channel || !sender || !msgType || !payload) {
+        showToast('All fields except metadata are required', 'error');
+        return;
+    }
+
+    let metadata = null;
+    if (metaStr) {
+        try {
+            metadata = JSON.parse(metaStr);
+        } catch (e) {
+            showToast('Invalid metadata JSON', 'error');
+            return;
+        }
+    }
+
+    try {
+        const result = await api.publishMessage({ channel, sender, msg_type: msgType, payload, metadata });
+        if (result.success) {
+            showToast('Message sent: ' + result.message_id.substring(0, 8) + '...', 'success');
+            document.getElementById('pubPayload').value = '';
+            document.getElementById('pubMetadata').value = '';
+            // Refresh messages if same channel is selected
+            const sel = document.getElementById('msgChannel');
+            if (sel.value === channel) loadMessages();
+        }
+    } catch (e) {
+        showToast('Failed to send message', 'error');
+    }
+}
+
+/* ============== Subscriptions Tab ============== */
+async function loadSubscriptions() {
+    try {
+        const data = await api.getSubscriptions();
+        document.getElementById('subTotal').textContent =
+            `Total active subscriptions: ${data.total}`;
+
+        const tbody = document.getElementById('subList');
+        if (data.channels.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-secondary);text-align:center;padding:40px">No active subscriptions</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.channels.map(ch => `
+            <tr>
+                <td><strong>${esc(ch.channel)}</strong></td>
+                <td style="font-family:monospace;font-size:0.8rem;word-break:break-all">${ch.subscription_ids.join(', ')}</td>
+                <td>${ch.count}</td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Subscriptions load error:', e);
+    }
+}
+
+/* ============== Toast ============== */
+function showToast(message, type = 'success') {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+/* ============== Utilities ============== */
+function esc(str) {
+    if (str === null || str === undefined) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
+function formatTime(isoStr) {
+    if (!isoStr) return '-';
+    try {
+        const d = new Date(isoStr);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch(e) { return isoStr; }
+}
+
+/* ============== Init ============== */
+async function init() {
+    await loadDashboard();
+    populateChannelSelector();
+    refreshInterval = setInterval(refreshCurrentTab, 3000);
+}
+
+init();
+</script>
+</body>
+</html>
