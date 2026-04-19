@@ -8,10 +8,10 @@ import pytest
 from piazza import (
     Bus,
     JSONSerializer,
-    MemoryStorage,
+    MemoryBackend,
     Message,
+    SQLiteBackend,
     SQLiteBus,
-    SQLiteStorage,
 )
 
 # ──────────────────────────────────────────────
@@ -111,12 +111,12 @@ class TestJSONSerializer:
 
 
 # ──────────────────────────────────────────────
-# MemoryStorage
+# MemoryBackend
 # ──────────────────────────────────────────────
 
 
-class TestMemoryStorage:
-    """Tests for MemoryStorage backend."""
+class TestMemoryBackend:
+    """Tests for MemoryBackend."""
 
     def _make_msg(self, channel="ch", msg_id="id-1", payload="x"):
         return Message(
@@ -129,56 +129,56 @@ class TestMemoryStorage:
         )
 
     def test_store_and_query(self):
-        storage = MemoryStorage()
+        backend = MemoryBackend()
         msg = self._make_msg()
-        storage.store(msg)
-        result = storage.query("ch")
+        backend.store(msg)
+        result = backend.query("ch")
         assert len(result) == 1
         assert result[0].payload == "x"
 
     def test_query_empty(self):
-        storage = MemoryStorage()
-        assert storage.query("nonexistent") == []
+        backend = MemoryBackend()
+        assert backend.query("nonexistent") == []
 
     def test_query_with_after(self):
-        storage = MemoryStorage()
-        storage.store(self._make_msg(msg_id="aaa"))
-        storage.store(self._make_msg(msg_id="bbb"))
-        storage.store(self._make_msg(msg_id="ccc"))
-        result = storage.query("ch", after="aaa")
+        backend = MemoryBackend()
+        backend.store(self._make_msg(msg_id="aaa"))
+        backend.store(self._make_msg(msg_id="bbb"))
+        backend.store(self._make_msg(msg_id="ccc"))
+        result = backend.query("ch", after="aaa")
         assert len(result) == 2
         assert result[0].id == "bbb"
 
     def test_query_with_limit(self):
-        storage = MemoryStorage()
+        backend = MemoryBackend()
         for i in range(5):
-            storage.store(self._make_msg(msg_id=f"id-{i:03d}"))
-        result = storage.query("ch", limit=2)
+            backend.store(self._make_msg(msg_id=f"id-{i:03d}"))
+        result = backend.query("ch", limit=2)
         assert len(result) == 2
 
     def test_list_channels(self):
-        storage = MemoryStorage()
-        storage.store(self._make_msg(channel="beta"))
-        storage.store(self._make_msg(channel="alpha"))
-        assert storage.list_channels() == ["alpha", "beta"]
+        backend = MemoryBackend()
+        backend.store(self._make_msg(channel="beta"))
+        backend.store(self._make_msg(channel="alpha"))
+        assert backend.list_channels() == ["alpha", "beta"]
 
     def test_close_clears(self):
-        storage = MemoryStorage()
-        storage.store(self._make_msg())
-        storage.close()
-        assert storage.query("ch") == []
+        backend = MemoryBackend()
+        backend.store(self._make_msg())
+        backend.close()
+        assert backend.query("ch") == []
 
     def test_repr(self):
-        assert repr(MemoryStorage()) == "MemoryStorage()"
+        assert repr(MemoryBackend()) == "MemoryBackend()"
 
 
 # ──────────────────────────────────────────────
-# SQLiteStorage
+# SQLiteBackend
 # ──────────────────────────────────────────────
 
 
-class TestSQLiteStorage:
-    """Tests for SQLiteStorage backend."""
+class TestSQLiteBackend:
+    """Tests for SQLiteBackend."""
 
     def _make_msg(self, channel="ch", msg_id="id-1", payload="x", metadata=None):
         return Message(
@@ -192,36 +192,36 @@ class TestSQLiteStorage:
         )
 
     def test_store_and_query(self):
-        storage = SQLiteStorage()
-        storage.store(self._make_msg())
-        result = storage.query("ch")
+        backend = SQLiteBackend()
+        backend.store(self._make_msg())
+        result = backend.query("ch")
         assert len(result) == 1
         assert result[0].payload == "x"
-        storage.close()
+        backend.close()
 
     def test_metadata_roundtrip(self):
-        storage = SQLiteStorage()
+        backend = SQLiteBackend()
         meta = {"tags": ["a", "b"]}
-        storage.store(self._make_msg(metadata=meta))
-        result = storage.query("ch")
+        backend.store(self._make_msg(metadata=meta))
+        result = backend.query("ch")
         assert result[0].metadata == meta
-        storage.close()
+        backend.close()
 
     def test_persistence(self, tmp_path):
         db = tmp_path / "test.db"
-        storage = SQLiteStorage(db)
-        storage.store(self._make_msg())
-        storage.close()
+        backend = SQLiteBackend(db)
+        backend.store(self._make_msg())
+        backend.close()
 
-        storage2 = SQLiteStorage(db)
-        result = storage2.query("ch")
+        backend2 = SQLiteBackend(db)
+        result = backend2.query("ch")
         assert len(result) == 1
-        storage2.close()
+        backend2.close()
 
     def test_repr(self):
-        storage = SQLiteStorage()
-        assert repr(storage) == "SQLiteStorage(':memory:')"
-        storage.close()
+        backend = SQLiteBackend()
+        assert repr(backend) == "SQLiteBackend(':memory:')"
+        backend.close()
 
 
 # ──────────────────────────────────────────────
@@ -229,11 +229,11 @@ class TestSQLiteStorage:
 # ──────────────────────────────────────────────
 
 
-class TestBusWithMemoryStorage:
-    """Tests for Bus with MemoryStorage backend."""
+class TestBusWithMemoryBackend:
+    """Tests for Bus with MemoryBackend."""
 
     def test_publish_and_poll(self):
-        with Bus(storage=MemoryStorage()) as bus:
+        with Bus(backend=MemoryBackend()) as bus:
             bus.publish("ch", "agent-a", "text", "msg1")
             bus.publish("ch", "agent-b", "text", "msg2")
             msgs = bus.poll("ch")
@@ -243,26 +243,26 @@ class TestBusWithMemoryStorage:
 
     def test_subscribe(self):
         received = []
-        with Bus(storage=MemoryStorage()) as bus:
+        with Bus(backend=MemoryBackend()) as bus:
             bus.subscribe("ch", lambda msg: received.append(msg))
             bus.publish("ch", "a", "text", "hello")
             assert len(received) == 1
             assert received[0].payload == "hello"
 
-    def test_storage_property(self):
-        mem = MemoryStorage()
-        bus = Bus(storage=mem)
-        assert bus.storage is mem
+    def test_backend_property(self):
+        mem = MemoryBackend()
+        bus = Bus(backend=mem)
+        assert bus.backend is mem
         bus.close()
 
     def test_serializer_property(self):
-        bus = Bus(storage=MemoryStorage())
+        bus = Bus(backend=MemoryBackend())
         assert isinstance(bus.serializer, JSONSerializer)
         bus.close()
 
     def test_repr(self):
-        bus = Bus(storage=MemoryStorage())
-        assert repr(bus) == "Bus(storage=MemoryStorage())"
+        bus = Bus(backend=MemoryBackend())
+        assert repr(bus) == "Bus(backend=MemoryBackend())"
         bus.close()
 
 
@@ -409,3 +409,28 @@ class TestSQLiteBusFileBacked:
         bus = SQLiteBus(db_file)
         assert str(db_file) in repr(bus)
         bus.close()
+
+
+# ──────────────────────────────────────────────
+# Backward compatibility aliases
+# ──────────────────────────────────────────────
+
+
+class TestBackwardCompatAliases:
+    """Verify deprecated aliases still work."""
+
+    def test_sqlite_storage_alias(self):
+        from piazza import SQLiteStorage
+
+        assert SQLiteStorage is SQLiteBackend
+
+    def test_memory_storage_alias(self):
+        from piazza import MemoryStorage
+
+        assert MemoryStorage is MemoryBackend
+
+    def test_storage_backend_alias(self):
+        from piazza import StorageBackend
+        from piazza.protocols import Backend
+
+        assert StorageBackend is Backend

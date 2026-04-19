@@ -8,10 +8,16 @@ from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from piazza.backends import SQLiteBackend
+from piazza.protocols import Backend
 from piazza.serializers import JSONSerializer
-from piazza.storage import SQLiteStorage
-from piazza.types import Message, Serializer, StorageBackend
+from piazza.types import Message
+
+if TYPE_CHECKING:
+    from piazza.admin.server import AdminInfo
+    from piazza.protocols import Serializer
 
 # Thread-safe monotonic sequence for _uuid7 fallback
 _seq_lock = threading.Lock()
@@ -51,34 +57,35 @@ def _now_iso() -> str:
 class Bus:
     """Composable message bus.
 
-    Combines a StorageBackend for persistence with in-process pub/sub.
-    The serializer is used for encoding/decoding metadata dicts.
+    Combines a Backend for message transport/persistence with
+    in-process pub/sub. The serializer is used for encoding/decoding
+    metadata dicts.
 
     Args:
-        storage: Storage backend for message persistence.
+        backend: Message backend for transport and persistence.
             Defaults to in-memory SQLite.
         serializer: Serializer for metadata encoding.
             Defaults to JSON.
 
     Example:
         >>> bus = Bus()  # in-memory SQLite + JSON
-        >>> bus = Bus(storage=SQLiteStorage("workspace/.piazza.db"))
-        >>> bus = Bus(storage=MemoryStorage())  # pure in-memory for tests
+        >>> bus = Bus(backend=SQLiteBackend("workspace/.piazza.db"))
+        >>> bus = Bus(backend=MemoryBackend())  # pure in-memory for tests
     """
 
     def __init__(
         self,
-        storage: StorageBackend | None = None,
+        backend: Backend | None = None,
         serializer: Serializer | None = None,
     ) -> None:
-        self._storage = storage or SQLiteStorage()
+        self._backend = backend or SQLiteBackend()
         self._serializer = serializer or JSONSerializer()
         self._subs: dict[str, dict[str, Callable[[Message], None]]] = defaultdict(dict)
 
     @property
-    def storage(self) -> StorageBackend:
-        """The underlying storage backend."""
-        return self._storage
+    def backend(self) -> Backend:
+        """The underlying message backend."""
+        return self._backend
 
     @property
     def serializer(self) -> Serializer:
@@ -118,7 +125,7 @@ class Bus:
             metadata=metadata,
         )
 
-        self._storage.store(msg)
+        self._backend.store(msg)
 
         # Notify in-process subscribers
         for callback in self._subs.get(channel, {}).values():
@@ -142,7 +149,7 @@ class Bus:
         Returns:
             Messages in chronological order (oldest first).
         """
-        return self._storage.query(channel, after=after, limit=limit)
+        return self._backend.query(channel, after=after, limit=limit)
 
     def subscribe(
         self,
@@ -180,11 +187,50 @@ class Bus:
         Returns:
             Sorted list of channel names.
         """
-        return self._storage.list_channels()
+        return self._backend.list_channels()
+
+    def start_admin(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8741,
+        serve_ui: bool = True,
+        remote: bool = False,
+        auth_token: str | None = None,
+    ) -> AdminInfo:
+        """Start the admin panel HTTP server.
+
+        Args:
+            host: Host to bind to. Defaults to localhost.
+            port: Port to listen on. Defaults to 8741.
+            serve_ui: Whether to serve the web UI.
+            remote: Allow remote connections (binds to 0.0.0.0).
+            auth_token: Optional auth token. Auto-generated if remote=True.
+
+        Returns:
+            AdminInfo with server URL and token.
+        """
+        from piazza.admin import AdminServer
+
+        self._admin_server = AdminServer(
+            self,
+            host=host,
+            port=port,
+            serve_ui=serve_ui,
+            remote=remote,
+            auth_token=auth_token,
+        )
+        return self._admin_server.start()
+
+    def stop_admin(self) -> None:
+        """Stop the admin panel server if running."""
+        if hasattr(self, "_admin_server") and self._admin_server:
+            self._admin_server.stop()
+            self._admin_server = None
 
     def close(self) -> None:
-        """Release resources held by the storage backend."""
-        self._storage.close()
+        """Release resources held by the backend."""
+        self.stop_admin()
+        self._backend.close()
 
     def __enter__(self) -> Bus:
         return self
@@ -193,13 +239,13 @@ class Bus:
         self.close()
 
     def __repr__(self) -> str:
-        return f"Bus(storage={self._storage!r})"
+        return f"Bus(backend={self._backend!r})"
 
 
 class SQLiteBus(Bus):
     """Convenience subclass: SQLite-backed bus.
 
-    Shorthand for ``Bus(storage=SQLiteStorage(db_path))``.
+    Shorthand for ``Bus(backend=SQLiteBackend(db_path))``.
 
     Args:
         db_path: Path to SQLite database file. Use ":memory:" for
@@ -212,7 +258,7 @@ class SQLiteBus(Bus):
     """
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
-        super().__init__(storage=SQLiteStorage(db_path))
+        super().__init__(backend=SQLiteBackend(db_path))
 
     def __repr__(self) -> str:
-        return f"SQLiteBus({self._storage!r})"
+        return f"SQLiteBus({self._backend!r})"
