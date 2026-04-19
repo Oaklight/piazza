@@ -68,6 +68,8 @@ include = ["src", "tests"]
 unresolved-attribute = "warn"
 # Tests intentionally assign to frozen dataclass to verify it raises
 invalid-assignment = "warn"
+# Lazy/conditional imports (TYPE_CHECKING, deferred admin loading)
+unresolved-import = "warn"
 
 [tool.complexipy]
 paths = ["src"]
