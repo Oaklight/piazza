@@ -1,156 +1,369 @@
-# Agent Messaging Hub - 设计文档
+# Agent Messaging Hub — 设计文档
 
-## 项目概述
+## 1. 项目概述
 
-一个面向 LLM/Agent 的消息中枢系统，采用 Hub-Client 架构：
-- **Hub Server**：管理消息队列、持久化、路由
-- **Client SDK**：封装成 tool 供 agent 调用（如 `send_message`, `read_channel`, `write_note` 等）
+Piazza 是一个面向 LLM/Agent 的消息中枢系统，为多智能体协作提供统一的通信基础设施。本项目是博士论文 *"Enabling Agentic AI at Scale through Decoupled Abstractions"* 中 Messaging 组件（第 9 章）的参考实现。
 
-### 核心功能
-- Agent 间通信（群聊/私聊）
-- 笔记/备忘录（Notebook/Scratch Pad）
+### 核心能力
+
+- Agent 间通信（群聊 / 私聊）
+- 笔记 / 备忘录（Notebook / Scratch Pad）
 - 历史记录追踪
 - 记忆存储（Memory）
 - 认知过程记录（Thought）
-- 广播/公告
+- 广播 / 公告
+
+### 设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **解耦抽象** | 所有组件通过 Protocol 接口定义，不与具体实现绑定 |
+| **分层职责** | 每层有明确边界：Backend 管存储与投递，Bus 管编排，Client SDK 管业务语义 |
+| **连接字符串驱动** | 部署决策（用哪种 backend）与架构设计正交，通过 connection string 在运行时选择 |
+| **渐进增强** | 核心功能最小化，高级能力通过可选接口渐进引入 |
 
 ---
 
-## 架构决策
+## 2. 系统架构
 
-### 1. Adapter Layer（适配器层）
-
-为了实现灵活的配置和扩展，系统采用 **Adapter 模式**（也称 Shim/Middleware），所有可替换组件通过统一接口对接：
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    Hub Server                        │
-├─────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │  Backend    │  │  Storage    │  │ Serializer  │  │
-│  │  Adapter    │  │  Adapter    │  │  Adapter    │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
-│         │                │                │         │
-│         ▼                ▼                ▼         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │Redis/RabbitMQ│ │File/DB/S3  │  │JSON/MsgPack │  │
-│  │/RocketMQ    │  │            │  │/Protobuf    │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
-
-**配置方式**（通过 config field）：
-```yaml
-hub:
-  backend:
-    type: redis  # redis | rabbitmq | rocketmq
-    url: redis://localhost:6379
-  storage:
-    type: file  # file | sqlite | s3
-    path: ./data
-    format: markdown  # markdown | binary
-  serializer:
-    type: json  # json | msgpack | protobuf
-```
-
-### 2. 消息后端
-
-**优先级顺序**：Redis (Valkey) → RabbitMQ → RocketMQ
-
-| 阶段 | 后端 | 理由 |
-|------|------|------|
-| MVP | Redis Streams | 最简单，部署方便，功能足够 |
-| 扩展 | RabbitMQ | 成熟的 MQ，丰富的路由功能 |
-| 大规模 | RocketMQ | 高吞吐，分布式场景 |
-
-**部署方式**：Docker 容器，通过用户提供的 URL 连接后端。
-
-**Adapter 接口**：
-```python
-class BackendAdapter(Protocol):
-    def publish(self, channel: str, message: bytes) -> str: ...
-    def subscribe(self, channel: str) -> Iterator[bytes]: ...
-    def get_history(self, channel: str, limit: int) -> List[bytes]: ...
-```
-
-### 3. 持久化策略
-
-**需求**：
-1. 可被人类阅读和理解（"白盒化"）
-2. 重启后可恢复
-3. 测试时可简化
-
-**实现方案**：
-| 模式 | 格式 | 用途 |
-|------|------|------|
-| 调试模式 | Markdown 文件 | 开发/调试，人类可读 |
-| 生产模式 | Binary (MessagePack) | 性能优化，压缩存储 |
-
-**Storage Adapter 接口**：
-```python
-class StorageAdapter(Protocol):
-    def save(self, key: str, data: bytes) -> None: ...
-    def load(self, key: str) -> Optional[bytes]: ...
-    def list_keys(self, prefix: str) -> List[str]: ...
-    def delete(self, key: str) -> None: ...
-```
-
-### 4. 序列化格式
-
-| 格式 | 速度 | 大小 | 可读性 | 适用场景 |
-|------|------|------|--------|----------|
-| JSON | 慢 | 大 | 好 | 调试、小规模、白盒化 |
-| MessagePack | 快 | 小 | 差 | 生产环境 |
-| Protobuf | 最快 | 最小 | 差 | 大规模、强类型 |
-
-**决策**：默认 JSON，生产环境可选 MessagePack。
-
-**Serializer Adapter 接口**：
-```python
-class SerializerAdapter(Protocol):
-    def encode(self, obj: Any) -> bytes: ...
-    def decode(self, data: bytes) -> Any: ...
-```
-
----
-
-## Channel 类型
-
-| Channel 类型 | 命名模式 | 用途 | 访问权限 |
-|-------------|----------|------|----------|
-| History | `history:{agent_id}` | 对话/工作记录 | 私有，SDK 自动写入 |
-| Notebook | `notebook:{agent_id}` | scratch pad / thoughts（含 Thought） | 私有，agent 主动写 |
-| Memory | `memory:{agent_id}` | 长期记忆（Semantic） | 私有 |
-| Broadcast | `broadcast:{topic}` | 公告、任务列表、成员列表 | 公开只读 |
-| Group | `group:{group_id}` | 群聊 | 成员可读写 |
-| DM | `dm:{agent_a}:{agent_b}` | 私聊 | 双方可读写 |
-
-### 认知心理学视角：Notebook vs Memory
-
-基于认知心理学的记忆分类，我们设计了两个核心的私有 channel：
+### 2.1 分层架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Agent 认知系统                            │
+│                     Delivery Layer                          │
+│            MCP / REST API / CLI / OpenAPI                   │
+│  （将 Client SDK 能力暴露给外部消费者：LLM、人类、脚本）       │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────────────┐      ┌─────────────────────┐       │
-│  │  Notebook Channel   │      │   Memory Channel    │       │
-│  │  (Episodic/Working) │      │    (Semantic/LTM)   │       │
-│  ├─────────────────────┤      ├─────────────────────┤       │
-│  │ • Note (普通笔记)    │      │ • Memory (结论/知识) │       │
-│  │ • Thought (思考过程) │ ───▶ │   - fact            │       │
-│  │   - reasoning       │ 提炼  │   - experience      │       │
-│  │   - planning        │      │   - decision        │       │
-│  │   - reflection      │      │   - preference      │       │
-│  │   - brainstorming   │      │                     │       │
-│  ├─────────────────────┤      ├─────────────────────┤       │
-│  │ 性质：过程性、临时    │      │ 性质：结果性、持久   │       │
-│  │ TTL：可自动过期      │      │ TTL：长期保留       │       │
-│  │ 类比：草稿纸         │      │ 类比：知识库        │       │
-│  └─────────────────────┘      └─────────────────────┘       │
-│                                                              │
+│                    Client SDK Layer                          │
+│                     PiazzaClient                            │
+│  （有状态封装：身份、游标、channel 命名、业务语义 API）         │
+├─────────────────────────────────────────────────────────────┤
+│                       Bus Layer                             │
+│                         Bus                                 │
+│  （编排层：组合 Backend + Serializer，提供 pub/sub）           │
+├─────────────────────────────────────────────────────────────┤
+│                     Backend Layer                           │
+│          SQLite │ Redis │ RabbitMQ │ ...                     │
+│  （消息存储与投递，通过 Protocol 接口统一抽象）                 │
 └─────────────────────────────────────────────────────────────┘
+```
+
+每一层只依赖其下一层的 Protocol 接口，不依赖具体实现。
+
+### 2.2 组件关系
+
+```
+PiazzaClient(target)
+  │
+  ├── target = Bus 对象 → LocalTransport → Bus → Backend
+  ├── target = "piazza.db"  → 自建 Bus(SQLiteBackend) → LocalTransport
+  ├── target = "redis://..." → 自建 Bus(RedisBackend) → LocalTransport
+  └── target = "http://..."  → RemoteTransport → PiazzaServer API
+```
+
+Client SDK 通过 Transport 抽象屏蔽本地/远程差异，对上层完全透明。
+
+---
+
+## 3. 核心组件
+
+### 3.1 消息模型（Message）
+
+消息是系统中的基本数据单元，所有通信都通过消息完成。
+
+```python
+@dataclass(frozen=True)
+class Message:
+    id: str              # UUID v7（时间有序），用作 cursor
+    channel: str         # channel 名称
+    sender: str          # 发送者 agent_id
+    msg_type: str        # 应用层消息类型
+    payload: str         # 消息内容（JSON 字符串或纯文本）
+    timestamp: str       # ISO 8601 时间戳
+    metadata: dict | None  # 可选扩展字段
+```
+
+**设计决策**：
+
+- Message 是不可变的（frozen dataclass）
+- `id` 使用 UUID v7 保证时间有序，作为 poll 的 cursor
+- `msg_type` 是自由字符串，语义由 Client SDK 层定义
+- `metadata` 用于携带结构化扩展信息（如 display_name、tags 等）
+
+### 3.2 Backend 层
+
+Backend 是消息的存储与投递引擎。所有 Backend 通过统一的 Protocol 接口对接，系统不假设底层是关系数据库、消息队列还是内存结构。
+
+#### Backend Protocol
+
+```python
+class Backend(Protocol):
+    """消息后端的统一接口。"""
+
+    def store(self, message: Message) -> None:
+        """持久化一条消息。"""
+        ...
+
+    def query(
+        self, channel: str,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> list[Message]:
+        """按 channel 查询消息，支持基于 ID 的 cursor 分页。"""
+        ...
+
+    def list_channels(self) -> list[str]:
+        """列出所有有消息的 channel。"""
+        ...
+
+    def subscribe(
+        self, channel: str,
+        callback: Callable[[Message], None],
+    ) -> str:
+        """注册消息投递回调，返回订阅 ID。
+
+        不同 backend 按自身特性实现：
+        - 轮询型 backend（SQLite）：Bus 层提供 in-process observer
+        - 原生 pub/sub backend（Redis）：利用原生订阅机制
+        - 消息队列 backend（RabbitMQ）：利用 consumer 机制
+        """
+        ...
+
+    def unsubscribe(self, subscription_id: str) -> None:
+        """取消订阅。"""
+        ...
+
+    def close(self) -> None:
+        """释放资源。"""
+        ...
+```
+
+> **注**：`subscribe`/`unsubscribe` 当前在 Bus 层以 in-process observer 模式实现，作为所有 backend 的通用基线。当 backend 具备原生推送能力时，Bus 层可将订阅委托给 backend，实现更高效的消息投递。
+
+#### 可用 Backend 实现
+
+| Backend | Connection String | 适用场景 |
+|---------|------------------|----------|
+| SQLiteBackend | `piazza.db` 或 `:memory:` | 开发、测试、单机部署、零外部依赖 |
+| MemoryBackend | `:memory:`（通过 Bus 对象传入） | 单元测试、临时场景 |
+| RedisBackend | `redis://host:port` | 多实例部署、需要原生 pub/sub |
+| RabbitMQBackend | `amqp://host:port` | 企业级、复杂路由、持久队列 |
+| *自定义* | *自定义 URL scheme* | 按需扩展 |
+
+> **选择建议**：Backend 之间没有优先级顺序。根据部署场景选择：开发测试用 SQLite/Memory（零依赖），生产单机用 SQLite，需要跨实例通信用 Redis，需要企业级消息保证用 RabbitMQ。
+
+#### 扩展新 Backend
+
+实现 `Backend` protocol 即可接入：
+
+```python
+class MyBackend:
+    def __init__(self, connection_url: str): ...
+    def store(self, message: Message) -> None: ...
+    def query(self, channel, after=None, limit=100) -> list[Message]: ...
+    def list_channels(self) -> list[str]: ...
+    def close(self) -> None: ...
+
+# 使用
+bus = Bus(backend=MyBackend("custom://..."))
+```
+
+### 3.3 Serializer
+
+Serializer 负责 metadata 字典的编解码。
+
+```python
+class Serializer(Protocol):
+    def encode(self, obj: dict) -> str: ...
+    def decode(self, data: str) -> dict: ...
+```
+
+| Serializer | 特点 | 适用场景 |
+|-----------|------|----------|
+| JSONSerializer | 人类可读，调试友好 | 默认，开发与生产通用 |
+| MessagePackSerializer | 紧凑高效 | 高吞吐场景 |
+| *自定义* | 按需 | 特殊协议要求 |
+
+### 3.4 Bus 层
+
+Bus 是编排层，组合 Backend 和 Serializer，提供统一的消息发布/查询接口。
+
+```python
+class Bus:
+    def __init__(
+        self,
+        backend: Backend | None = None,      # 默认 SQLiteBackend(:memory:)
+        serializer: Serializer | None = None, # 默认 JSONSerializer
+        require_auth: bool = False,           # 认证模式开关
+    ): ...
+
+    # 核心操作
+    def publish(self, channel, sender, msg_type, payload, metadata=None) -> str
+    def poll(self, channel, after=None, limit=100) -> list[Message]
+    def subscribe(self, channel, callback) -> str
+    def unsubscribe(self, subscription_id) -> None
+    def channels(self) -> list[str]
+
+    # 生命周期
+    def close(self) -> None
+    def __enter__ / __exit__  # context manager
+
+    # 属性
+    @property backend -> Backend
+    @property serializer -> Serializer
+```
+
+**Bus 层的职责边界**：
+
+- ✅ 消息 ID 生成（UUID v7）
+- ✅ 时间戳生成
+- ✅ 将消息路由到 Backend
+- ✅ In-process pub/sub（作为通用基线）
+- ✅ 认证模式控制
+- ❌ 不做 channel 命名校验（由 Client SDK 负责）
+- ❌ 不管理 agent 身份（由 Client SDK 负责）
+- ❌ 不追踪 cursor 状态（由 Client SDK 负责）
+
+### 3.5 Client SDK 层（PiazzaClient）
+
+PiazzaClient 是面向 agent/LLM 的核心接口，提供有状态的消息操作封装。
+
+#### 3.5.1 连接模型
+
+PiazzaClient 的构造函数接受 `Bus` 对象或 connection string，自动选择 Transport：
+
+```python
+# 方式 1：传入 Bus 对象（orchestrator 编排模式）
+bus = Bus(backend=SQLiteBackend("data.db"))
+client = PiazzaClient(bus, "coder-1")
+
+# 方式 2：传入 connection string（自动创建 Bus）
+client = PiazzaClient("piazza.db", "coder-1")
+client = PiazzaClient(":memory:", "coder-1")
+client = PiazzaClient("redis://localhost:6379", "coder-1")
+client = PiazzaClient("amqp://localhost", "coder-1")
+
+# 方式 3：连接远程 PiazzaServer
+client = PiazzaClient("http://piazza:8741", "coder-1", secret="sk-xxx")
+```
+
+内部通过 Transport 抽象屏蔽差异：
+
+```
+target 类型                → Transport         → Bus 生命周期
+───────────────────────────────────────────────────────────────
+Bus 对象                   → LocalTransport    → 调用方管理
+文件路径 / :memory:        → LocalTransport    → Client 自建自管
+redis:// / amqp://         → LocalTransport    → Client 自建自管
+http:// / https://         → RemoteTransport   → 远程 Server 管理
+```
+
+Transport 是纯内部抽象，用户不直接接触。
+
+#### 3.5.2 身份与认证
+
+##### 身份模型
+
+```
+agent_id      唯一系统标识，用户自选，格式约束（小写字母+数字+连字符，3-64 字符）
+secret        Piazza 生成的凭证，SHA256 哈希存储
+display_name  可选显示名，可重复，默认等于 agent_id
+```
+
+类比微信：agent_id ≈ 微信号（唯一），display_name ≈ 昵称（可重复）。
+
+##### 注册与连接
+
+```python
+# 首次注册
+client, secret = PiazzaClient.register(target, "coder-1", display_name="Code Bot")
+# → 生成 secret，写入 _system:registry channel
+# → 调用方自行保存 secret（env var / config）
+
+# 凭 secret 重连（cross-session 恢复）
+client = PiazzaClient(target, "coder-1", secret="sk-xxx")
+# → 验证 secret → 恢复 cursor → 继续工作
+
+# 无认证模式（Bus require_auth=False 时）
+client = PiazzaClient(target, "coder-1")
+# → 跳过认证，直接使用
+```
+
+##### 认证模式
+
+通过 Bus 启动配置控制：
+
+```python
+# 开发/测试：无认证（默认）
+bus = Bus(require_auth=False)
+
+# 生产/共享服务：强制认证
+bus = Bus(require_auth=True)
+```
+
+##### 注册表存储
+
+Agent 注册信息存储在 `_system:registry` channel 中，遵循"一切皆消息"原则：
+
+```python
+# 注册时写入的消息
+channel = "_system:registry"
+sender = agent_id
+msg_type = "register"
+metadata = {
+    "display_name": "Code Bot",
+    "secret_hash": "sha256:...",
+    "action": "register",  # register | deregister | update
+}
+```
+
+Client SDK 读取该 channel 构建当前 agent 状态映射。
+
+##### Secret 管理
+
+```python
+# 预留接口（MVP 未实现）
+client.rotate_secret() -> str      # raises NotImplementedError
+client.revoke() -> None            # raises NotImplementedError
+```
+
+#### 3.5.3 Channel 类型与命名
+
+Channel 命名规则在 **Client SDK 层**强制执行，Bus 层不做校验。
+
+| Channel 类型 | 命名模式 | 用途 | 访问控制 |
+|-------------|----------|------|----------|
+| History | `history:{agent_id}` | 对话/工作记录 | 私有，SDK 自动写入 |
+| Notebook | `notebook:{agent_id}` | 思考过程、临时笔记（含 Thought） | 私有，agent 主动写 |
+| Memory | `memory:{agent_id}` | 长期记忆（语义记忆） | 私有 |
+| Broadcast | `broadcast:{topic}` | 公告、任务列表、成员列表 | 公开只读 |
+| Group | `group:{group_id}` | 群聊 | 成员可读写 |
+| DM | `dm:{agent_a}:{agent_b}` | 私聊（双方 ID 按字典序排列） | 双方可读写 |
+| System | `_system:{purpose}` | 内部管理（注册表、cursor 等） | 系统内部 |
+
+##### Notebook vs Memory（认知心理学视角）
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                  Agent 认知系统                            │
+├──────────────────────────────────────────────────────────┤
+│                                                           │
+│  ┌─────────────────────┐    ┌─────────────────────┐      │
+│  │  Notebook Channel   │    │   Memory Channel    │      │
+│  │  (情景/工作记忆)     │    │   (语义/长期记忆)    │      │
+│  ├─────────────────────┤    ├─────────────────────┤      │
+│  │ • Note (普通笔记)    │    │ • Memory (知识/事实) │      │
+│  │ • Thought (思考过程) │───▶│   - fact             │      │
+│  │   - reasoning       │提炼 │   - experience       │      │
+│  │   - planning        │    │   - decision         │      │
+│  │   - reflection      │    │   - preference       │      │
+│  │   - brainstorming   │    │                      │      │
+│  ├─────────────────────┤    ├─────────────────────┤      │
+│  │ 性质：过程性、临时   │    │ 性质：结果性、持久    │      │
+│  │ 类比：草稿纸        │    │ 类比：知识库          │      │
+│  └─────────────────────┘    └─────────────────────┘      │
+│                                                           │
+└──────────────────────────────────────────────────────────┘
 ```
 
 | 维度 | Notebook (Episodic) | Memory (Semantic) |
@@ -159,40 +372,157 @@ class SerializerAdapter(Protocol):
 | **内容** | 思考过程、临时笔记、草稿 | 提炼的结论、事实、知识 |
 | **结构** | 可以是杂乱的思维流 | 应该是结构化、简洁的 |
 | **时效性** | 可丢弃、可自动过期 | 持久保留 |
-| **用途** | 调试、白盒化、复盘 | 未来召回、知识复用 |
-| **类比** | 草稿纸上的演算 | 整理后的笔记本 |
 
-**设计决策**：Thought 存储在 Notebook channel 中，因为：
-1. Notebook 的设计初衷就是 "scratch pad / thoughts"
-2. Thought 和 Note 都是临时性、过程性内容
-3. 通过消息类型（Note vs Thought）区分即可
+#### 3.5.4 API 设计
 
-### Broadcast Channel 管理
+PiazzaClient 采用 **资源\_动作** 命名风格（`resource_action`），兼顾 SDK 调用的可读性和作为 MCP/CLI tool 暴露时的直观性。
 
-**问题**：谁给公开 board 发消息？
+##### 核心 API：Channel 操作
 
-**解决方案**：引入 **Moderator 机制**
+所有通信的基础，直接操作 channel：
 
-```
-Agent A ─────┐
-Agent B ─────┼──▶ [Submission Queue] ──▶ [Moderator] ──▶ [Broadcast Channel]
-Agent C ─────┘           │                    │
-                         │                    ▼
-                         │              审核/过滤/分类
-                         │                    │
-                         ▼                    ▼
-                   broadcast:submissions   broadcast:announcements
-                                           broadcast:tasks
-                                           broadcast:members
+```python
+# 发送消息到指定 channel
+channel_send(channel: str, content: str, msg_type: str = "chat",
+             metadata: dict | None = None) -> str
+
+# 读取 channel 消息（随机访问，不推进 cursor）
+channel_read(channel: str, limit: int = 10,
+             after: str | None = None) -> list[Message]
+
+# 增量轮询（cursor 自动推进，用于持续跟踪新消息）
+channel_poll(channel: str) -> list[Message]
+
+# 列出所有 channel
+channel_list() -> list[str]
 ```
 
-- **Submission Queue**：任何 agent 都可以提交到 `broadcast:submissions`
-- **Moderator Agent**：系统内置的管理 agent，负责审核、分类、发布
-- **MVP 简化**：先不做 Moderator，Broadcast 由管理员手动发布或通过 API 直接发布
+##### 语义 API：高层业务操作
+
+以下方法是 channel 操作的语义封装（syntactic sugar），自动路由到对应 channel 并设置正确的 `msg_type`：
+
+```python
+# ── Notebook（写入 notebook:{agent_id}）──
+note_write(content: str, tags: list[str] | None = None) -> str
+note_read(tags: list[str] | None = None, limit: int = 10) -> list[Message]
+
+# ── Thought（写入 notebook:{agent_id}，msg_type="thought"）──
+thought_record(
+    thinking_mode: str,    # reasoning | planning | reflection | recalling | brainstorming | exploring
+    focus_area: str,
+    thought_process: str,
+) -> str
+thought_read(limit: int = 10) -> list[Message]
+
+# ── Memory（写入 memory:{agent_id}）──
+memory_store(content: str, memory_type: str = "general") -> str
+memory_recall(query: str, limit: int = 5) -> list[Message]
+# memory_recall 的语义搜索能力由外部组件提供（如 mem0），
+# Client SDK 层仅提供接口定义，默认实现为按时间倒序返回。
+
+# ── DM（写入 dm:{sorted_pair}）──
+dm_send(to_agent: str, content: str) -> str
+dm_read(with_agent: str, limit: int = 10) -> list[Message]
+
+# ── Group ──
+group_create(name: str, members: list[str]) -> str
+group_send(group_id: str, content: str) -> str
+group_read(group_id: str, limit: int = 10) -> list[Message]
+
+# ── Broadcast ──
+broadcast_list() -> list[str]
+broadcast_read(topic: str, limit: int = 10) -> list[Message]
+
+# ── Notification ──
+notification_check() -> list[Message]
+```
+
+##### 语义 API 与 Channel 操作的映射关系
+
+```
+note_write(content, tags)
+  → channel_send(f"notebook:{self.agent_id}", content, msg_type="note",
+                  metadata={"tags": tags})
+
+thought_record(mode, focus, process)
+  → channel_send(f"notebook:{self.agent_id}", process, msg_type="thought",
+                  metadata={"thinking_mode": mode, "focus_area": focus})
+
+memory_store(content, memory_type)
+  → channel_send(f"memory:{self.agent_id}", content, msg_type="memory",
+                  metadata={"memory_type": memory_type})
+
+dm_send(to_agent, content)
+  → channel_send(f"dm:{sorted_pair}", content, msg_type="chat")
+```
+
+#### 3.5.5 Cursor 管理
+
+PiazzaClient 维护 per-channel cursor，支持增量消息读取。
+
+##### 两种读取模式
+
+| 方法 | Cursor | 场景 |
+|------|--------|------|
+| `channel_poll(channel)` | ✅ 自动推进 | 持续跟踪新消息（主要使用方式） |
+| `channel_read(channel, ...)` | ❌ 不推进 | 随机访问、查看历史、按条件检索 |
+
+##### Cursor 持久化
+
+Cursor 状态存储在 `_system:cursors:{agent_id}` channel 中，实现 cross-session 恢复：
+
+```python
+# Client SDK 定期或在关键节点持久化 cursor
+channel_send(
+    f"_system:cursors:{self.agent_id}",
+    json.dumps(self._cursors),  # {"channel_a": "last_msg_id", ...}
+    msg_type="cursor_snapshot",
+)
+
+# 重连时从 channel 读取最新快照恢复
+```
+
+**Cross-session 恢复流程**：
+
+```
+Agent 死亡
+  → 重新 spawn
+  → 用同一个 agent_id + secret 创建 PiazzaClient
+  → _announce() 写入新的 register 消息
+  → _restore_cursors() 从 _system:cursors:{agent_id} 读取最新快照
+  → channel_poll() 从断点继续
+```
+
+### 3.6 Delivery 层
+
+Delivery 层将 Client SDK 的能力暴露给外部消费者。
+
+```
+┌────────────────────────────────────────────────────┐
+│                 PiazzaClient SDK                   │
+├───────────┬───────────┬───────────┬────────────────┤
+│    MCP    │ REST API  │   CLI     │   OpenAPI      │
+│  Server   │  Server   │ (Tier 2)  │   Schema       │
+│           │           │           │                │
+│  LLM via  │  HTTP     │  LLM via  │  Swagger /     │
+│  MCP tool │  clients  │  bash tool│  code-gen      │
+└───────────┴───────────┴───────────┴────────────────┘
+```
+
+#### CLI 两层设计
+
+| 层级 | 目标用户 | 功能 |
+|------|---------|------|
+| **Tier 1：运维管理** | 运维人员 | `piazza serve`, `piazza status`, `piazza admin` |
+| **Tier 2：SDK-over-CLI** | LLM（通过 bash tool） | 将 SDK 方法映射为 CLI 命令，如 `piazza channel send ...` |
+
+#### Delivery 通道
+
+PiazzaClient 的方法可以通过 toolregistry-server 统一暴露为 MCP tool、REST API 和 CLI 命令，无需为每种协议单独编写适配代码。
 
 ---
 
-## 通信模式
+## 4. 通信模式
 
 ### 同步 vs 异步
 
@@ -200,351 +530,229 @@ Agent C ─────┘           │                    │
 |------|------|------|
 | 发消息给别人 | 异步 fire-and-forget | 像发 Slack/Email |
 | 查询自己的 memory/notebook | 同步查询 | 读操作，不是消息传递 |
-| 等待别人回复 | 异步 + 轮询/通知 | 提供 `check_notifications()` tool |
+| 等待别人回复 | 异步 + 轮询/通知 | 提供 `notification_check()` |
 
-**核心原则**：消息发送是异步的，但数据查询是同步的。
+**核心原则**：消息发送是异步的，数据查询是同步的。
 
 ### 通知机制
 
-**决策**：
-- **长期目标**：C（主动轮询 + 返回时附带通知）
-- **MVP 实现**：A（`check_notifications()` tool，agent 主动轮询）
+- **MVP**：`notification_check()` 主动轮询
+- **未来**：主动轮询 + 返回时附带通知（需要 Agent SDK 层支持）
 
-> 💡 **说明**：B 方案需要在所有 tool 返回时注入通知，这要么限制在 hub 相关工具，要么依赖 agent 框架支持。MVP 阶段先用简单的轮询方式。
+### Broadcast Channel 管理
+
+**MVP**：Broadcast 由管理员 / API 直接发布。
+
+**未来**：引入 Moderator Agent 机制 — Agent 提交到 `broadcast:submissions`，Moderator 审核后发布到对应 broadcast channel。
 
 ---
 
-## 消息类型
+## 5. 消息类型
 
-基于通信模式需求，支持以下消息类型：
+`msg_type` 是自由字符串，以下为约定的标准类型：
 
-| 类型 | 说明 | 用途 |
-|------|------|------|
-| `ChatMessage` | 聊天消息 | 群聊/私聊 |
-| `Note` | 笔记/备忘 | Notebook scratch pad |
-| `Memory` | 记忆条目 | 长期记忆存储 |
-| `Thought` | 认知过程记录 | 思考过程白盒化（参考 ThinkTool） |
-| `Broadcast` | 广播消息 | 公告/任务/成员列表 |
-| `TaskRequest` | 任务请求 | 任务分发 |
-| `TaskResult` | 任务结果 | 任务完成反馈 |
-| `Notification` | 通知 | 新消息/事件提醒 |
-| `Heartbeat` | 心跳 | 存活检测 |
+| 类型 | 说明 | 典型 channel |
+|------|------|-------------|
+| `chat` | 聊天消息 | group:\*, dm:\* |
+| `note` | 笔记/备忘 | notebook:\* |
+| `thought` | 认知过程记录 | notebook:\* |
+| `memory` | 记忆条目 | memory:\* |
+| `broadcast` | 广播消息 | broadcast:\* |
+| `task_request` | 任务请求 | group:\*, dm:\* |
+| `task_result` | 任务结果 | group:\*, dm:\* |
+| `notification` | 通知 | _system:\* |
+| `heartbeat` | 心跳 | _system:\* |
+| `register` | Agent 注册 | _system:registry |
+| `cursor_snapshot` | Cursor 快照 | _system:cursors:\* |
 
 ### Thought 类型设计（借鉴 ThinkTool）
 
-**设计理念**：让 agent 的思考过程从"黑盒"变成"白盒"
+**设计理念**：让 agent 的思考过程从"黑盒"变为"白盒"。
 
 ```python
-class Thought:
-    thinking_mode: str  # reasoning | planning | reflection | recalling | brainstorming | exploring
-    focus_area: str     # 当前思考的问题/主题
-    thought_process: str  # 详细的思考过程
-    timestamp: datetime
-    agent_id: str
-```
+# 通过 thought_record() 写入
+thought_record(
+    thinking_mode="reasoning",    # reasoning | planning | reflection | ...
+    focus_area="API 设计选型",
+    thought_process="考虑了三种方案...",
+)
 
-**存储位置**：Notebook channel（`notebook:{agent_id}`）
-
-**与其他类型的关系**：
-
-| 类型 | 存储位置 | 性质 | 说明 |
-|------|----------|------|------|
-| **Note** | Notebook | Episodic | 普通笔记、临时记录 |
-| **Thought** | Notebook | Episodic | 结构化思考过程（CoT 持久化）|
-| **Memory** | Memory | Semantic | 提炼的结论、事实、知识 |
-
-**典型工作流**：
-
-```
-[思考过程] ──record_thought()──▶ Notebook Channel
-     │                              (episodic)
-     │
-     ▼ 模型自己总结/提炼
-     │
-[得出结论] ──store_memory()──▶ Memory Channel
-                                (semantic)
+# 底层存储为 Message:
+# channel = "notebook:{agent_id}"
+# msg_type = "thought"
+# payload = thought_process
+# metadata = {"thinking_mode": "reasoning", "focus_area": "API 设计选型"}
 ```
 
 ---
 
-## SDK 设计
+## 6. 部署模式
 
-### 并发模型
+### 6.1 嵌入式（In-process）
 
-| 模式 | 说明 | 优先级 |
-|------|------|--------|
-| 同步 | `msg = client.read_channel("xxx")` 阻塞等待 | MVP 先实现 |
-| 异步 | `msg = await client.read_channel("xxx")` | 后续支持 |
-
-### Client Tools（MCP/OpenAPI）
+所有 agent 在同一进程内，共享 Bus 对象。
 
 ```python
-# ===== 消息发送 =====
-send_message(channel: str, content: str, type: MessageType) -> MessageId
-send_dm(to_agent: str, content: str) -> MessageId
-
-# ===== 消息读取 =====
-read_channel(channel: str, limit: int = 10) -> List[Message]
-read_dm(with_agent: str, limit: int = 10) -> List[Message]
-
-# ===== Notebook 操作（Episodic/Working Memory）=====
-write_note(content: str, tags: List[str] = None) -> NoteId
-read_notes(tags: List[str] = None, limit: int = 10) -> List[Note]
-
-# Thought 也存储在 Notebook channel（结构化的 Note）
-record_thought(
-    thinking_mode: str,  # reasoning | planning | reflection | recalling | ...
-    focus_area: str,
-    thought_process: str
-) -> ThoughtId  # 底层写入 notebook:{agent_id}
-
-read_thoughts(limit: int = 10) -> List[Thought]
-
-# ===== Memory 操作（Semantic/Long-term Memory）=====
-store_memory(content: str, type: str = "general") -> MemoryId
-# type: general | fact | experience | decision | preference | ...
-recall_memory(query: str, limit: int = 5) -> List[Memory]
-
-# ===== 通知 =====
-check_notifications() -> List[Notification]
-
-# ===== Broadcast 发现 =====
-list_broadcasts() -> List[BroadcastChannel]  # 获取所有公开 channel 列表
-read_broadcast(topic: str, limit: int = 10) -> List[Broadcast]
-
-# ===== 群组管理 =====
-create_group(name: str, members: List[str]) -> GroupId
-join_group(group_id: str) -> bool
-leave_group(group_id: str) -> bool
-list_groups() -> List[Group]  # 获取我加入的群组
+bus = Bus(backend=SQLiteBackend("data.db"))
+client_a = PiazzaClient(bus, "coder-1")
+client_b = PiazzaClient(bus, "reviewer-1")
 ```
 
-### 消息打断机制（Agent SDK 层面）
+- 最简单，零网络开销
+- subscribe 回调在进程内同步触发
+- 适合单机多 agent 编排
 
-> 💡 **说明**：消息打断机制是 Agent SDK 层面的功能，不属于 Messaging Hub 核心。但 Hub 可以提供支持：
+### 6.2 多进程共享存储
 
-- **Priority Field**：消息可携带优先级标记
-- **Interrupt Channel**：专门的高优先级通知通道 `interrupt:{agent_id}`
-- **Agent SDK 实现**：在每次 tool 调用前检查 interrupt channel
+各进程独立创建 Client，指向同一存储。
 
----
+```python
+# 进程 A
+client_a = PiazzaClient("shared/piazza.db", "coder-1")
 
-## 错误处理
+# 进程 B
+client_b = PiazzaClient("shared/piazza.db", "reviewer-1")
+```
 
-**消息处理失败场景**：
-- 网络超时
-- Hub 服务不可用
-- 消息格式错误
+- 通过 SQLite WAL 模式支持并发读写
+- subscribe 只在进程内生效，跨进程用 `channel_poll()`
+- 适合单机多进程场景
 
-**MVP 策略**：简单重试 + 返回错误给 agent，让 agent 自己决定处理方式。
+### 6.3 持久服务（PiazzaServer）
 
-后续可扩展为死信队列（DLQ）或可配置策略。
+中心化服务，Client 通过网络 API 接入。
 
----
+```python
+# Server 端
+bus = Bus(backend=SQLiteBackend("data.db"), require_auth=True)
+server = PiazzaServer(bus, host="0.0.0.0", port=8741)
 
-## 额外功能优先级
+# Client 端（任意机器）
+client = PiazzaClient("http://piazza:8741", "coder-1", secret="sk-xxx")
+```
 
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| 消息追踪 | 高 | 应用层追踪 + 后端监控工具（如 Redis Commander、RabbitMQ Management） |
-| 消息过期/TTL | 中 | 按 channel 类型和 session 设计，MVP 后再细化 |
-| 消息去重 | 低 | 按 channel 类型区分需求，暂不实现 |
-| 优先级队列 | 低 | 见下方解释 |
-| 延迟消息 | 低 | 见下方解释 |
-
-### 优先级队列应用场景
-
-当需要确保某些消息优先处理时使用：
-- **紧急任务**：高优先级任务插队执行
-- **消息打断**：重要通知优先送达
-- **资源调度**：VIP agent 的请求优先响应
-
-**MVP 不需要**：目前场景较简单，先按 FIFO 处理。
-
-### 延迟消息应用场景
-
-需要在未来某个时间点触发消息时使用：
-- **定时提醒**：设置 10 分钟后提醒自己
-- **重试机制**：失败后延迟 N 秒重试
-- **任务调度**：安排未来执行的任务
-
-**MVP 不需要**：当前没有明确的定时场景需求。
+- 适合多机部署、云环境
+- 身份认证强制启用
+- 可配合 Redis/RabbitMQ backend 实现高可用
 
 ---
 
-## 部署方式
+## 7. 配置
 
-| 方式 | 说明 |
-|------|------|
-| CLI | 直接运行 `agent-hub serve` |
-| Docker | CLI 的封装，`docker run agent-hub` |
-| K8s | Helm chart（后续） |
+### 7.1 Connection String（当前）
 
-> 📋 **后续计划**：设计 `docs/API.md` 定义详细的 API 接口和命名规范。
+Client SDK 通过 connection string 选择 backend，配置与代码融为一体：
 
----
+```python
+PiazzaClient("piazza.db", agent_id)           # SQLite
+PiazzaClient(":memory:", agent_id)             # 内存
+PiazzaClient("redis://host:6379", agent_id)    # Redis
+PiazzaClient("amqp://host:5672", agent_id)     # RabbitMQ
+PiazzaClient("http://host:8741", agent_id)     # 远程服务
+```
 
-## 决策总结
+### 7.2 配置文件（未来，PiazzaServer 部署时）
 
-### Q1: Memory 管理 ✅
+服务端部署时将支持 YAML/TOML 配置文件：
 
-**决策**：MVP 采用简单 key-value 存储 + type 字段分类
+```yaml
+# piazza.yaml（预留设计，尚未实现）
+server:
+  host: 0.0.0.0
+  port: 8741
+  require_auth: true
 
-借鉴 ThinkTool 设计思路：
-- 统一的 `store_memory()` 接口
-- 通过 `type` 参数区分记忆类型（general/fact/experience/...）
-- 可复用 ThinkTool 的 `recalling` 模式进行记忆召回
+backend:
+  url: redis://localhost:6379
+  # url 格式遵循 connection string 约定
 
-后续可引入专门的 Memory Agent 进行智能管理。
+serializer:
+  type: json  # json | msgpack
 
-### Q2: 通知机制 ✅
+logging:
+  level: info
+```
 
-**决策**：MVP 实现 A 方案（`check_notifications()` 轮询），长期支持 C 方案。
-
-### Q3: Channel 类型 ✅
-
-**决策**：6 种类型满足需求，增加 Broadcast Moderator 机制说明。
-
-MVP 阶段 Broadcast 由管理员/API 直接发布，后续引入 Moderator Agent。
-
----
-
-## 下一步
-
-1. ~~确认上述待确认问题~~ ✅
-2. 设计详细的 API Schema（`docs/API.md`）
-3. 创建项目骨架代码
-4. 实现 Adapter 接口
-5. 实现 Redis Streams 后端
-6. 开发 Client SDK
+配置文件最终也解析为 connection string + 构造函数参数，两种配置方式等价。
 
 ---
 
-## 附录：原始需求讨论
+## 8. 错误处理
 
-<details>
-<summary>点击展开原始问答记录</summary>
+**MVP 策略**：简单重试 + 返回错误给 agent，由 agent 自行决定处理方式。
 
-### 1. 消息后端优先级
-
-**问题**：你希望首先支持哪个后端？后续扩展顺序是什么？
-
-**回答**：Redis (Valkey) -> RabbitMQ -> RocketMQ。MVP的话只需要最简单的一个就行，找最成熟的，反正我们部署后端都是docker，然后通过用户提供的url进行后端访问。对每个agent来说它看到就是一组tool，同时我们在后续的agent sdk设计中也会手动调用这些tool去进行部分的手动管理。
-
-### 2. 消息持久化需求
-
-**问题**：Agent 的消息/记忆需要持久化吗？
-
-**回答**：持久化是必须的，目的是：
-1. 可以被人看到和理解，这样我们可以"白盒化"这个机制。希望持久化的模式可选：binary（最压缩），或者md文件
-2. 重启可恢复
-3. 测试的时候持久化可以做的很简单
-
-### 3. Agent 通信模式
-
-**问题**：你预期的主要通信模式是什么？
-
-**回答**：每个接入这个系统的agent都有如下的一些能力：
-- 有一个自己的channel做history记录
-- 有一个自己的notebook，用来记录thoughts或者一些重要的东西
-- 有一个memory channel
-- 能看到一些公开的广播频道
-- 可以选择创建"群"对话
-- 可以选择创建点对点对话
-
-### 4. 消息类型
-
-**回答**：根据通信模式预期，可能都需要。
-
-### 5. 同步 vs 异步
-
-**回答**：应该是异步，类似于人发slack或email。但需要设计一个提醒机制。对于memory查询是同步的（读操作）。
-
-### 6. 序列化格式
-
-**回答**：考虑到多agent大量消息接入，性能很重要，稳定也很重要。
-
-### 7. API 风格
-
-**回答**：要做一个hub和client分离的，对于模型来说他们只看到client，server上放hub。
-
-### 8. 并发模型
-
-**回答**：已澄清 - 指 Client SDK 实现方式，先做同步，后续加 asyncio 支持。
-
-### 9. 错误处理
-
-**回答**：已澄清 - MVP 阶段简单重试 + 返回错误给 agent。
-
-### 10. 额外功能优先级
-
-**回答**：已分析 - 消息追踪(高) > TTL(中) > 去重/优先级/延迟(低)。
-
-### 11. 部署环境
-
-**回答**：同时提供cli和docker，docker作为cli的封装。
-
-### 12. 与现有系统集成
-
-**回答**：基于openapi或者mcp接口暴露给模型。考虑后端hub server设计和client toolset设计。
-
-</details>
+**未来扩展**：
+- 死信队列（DLQ）
+- 可配置重试策略
+- 消息投递确认
 
 ---
 
-## 附录：设计反馈记录
+## 9. 扩展路线
 
-<details>
-<summary>点击展开用户反馈</summary>
+| 功能 | 说明 | 依赖 |
+|------|------|------|
+| Secret 轮换 | rotate_secret() / revoke() | Client SDK |
+| 消息 TTL | 按 channel 类型设置过期策略 | Backend |
+| 消息追踪 | 分布式追踪 ID | Message metadata |
+| 优先级队列 | 紧急消息插队 | Backend |
+| 延迟消息 | 定时投递 | Backend |
+| Moderator Agent | Broadcast 审核机制 | Client SDK |
+| Async API | asyncio 支持 | 全栈 |
+| 消息打断 | interrupt:{agent_id} channel + 优先级 | Agent SDK 层 |
+| Per-channel 别名 | 类似微信群名片 | Client SDK |
+| Agent 心跳 | 活跃度检测与过期回收 | Client SDK |
 
-### 消息后端
-> 我们需要注意提供一个对接各种后端的middleware/shim，通过config field配置
+---
 
-**处理**：添加了 Adapter Layer 设计，包含 Backend/Storage/Serializer 三个 Adapter。
+## 10. 决策记录
 
-### 持久化策略
-> 这个持久化我们可能也要做个灵活的shim，通过config field配置。是应该叫做shim还是middleware？
+### D1: Backend 与 Storage 合并
 
-**处理**：统一使用 "Adapter" 术语，这是更准确的设计模式命名。添加了 Storage Adapter 接口。
+**决策**：Backend = transport + persistence 一体，不单独抽象 Storage 层。
 
-### 序列化格式
-> 这个也得有个shim/middleware，通过config field配置
+**理由**：当前所有 backend（SQLite、Redis Streams、RabbitMQ）都天然包含持久化。若未来出现纯传输型 backend（如 MQTT）需要独立存储，可在该 backend 内部组合，不影响 Protocol 接口。
 
-**处理**：添加了 Serializer Adapter 接口。
+**演进路径**：当确实需要 transport 与 persistence 分离时（如 MQTT + PostgreSQL），可引入独立的 Storage Protocol，Backend 内部组合使用。当前 Protocol 接口无需变更。
 
-### 消息类型
-> 是否需要添加Thought类型？
+### D2: Channel 命名在 Client SDK 层强制
 
-**处理**：添加了 Thought 类型，借鉴 ThinkTool 的设计理念（让思考过程白盒化）。
+**决策**：Bus 层接受任意 channel 名，命名规则由 Client SDK 层校验和强制执行。
 
-### SDK 设计
-> 公开channel如何获知？消息打断机制？
+**理由**：Bus 层保持通用性，不嵌入业务语义。Channel 命名是应用层约定，不同应用可能有不同的命名需求。
 
-**处理**：
-- 添加了 `list_broadcasts()` API
-- 说明了消息打断机制属于 Agent SDK 层面，Hub 可提供 priority/interrupt 支持
+### D3: 身份认证采用 agent_id + secret
 
-### 额外功能
-> 消息追踪、去重、TTL、优先级队列、延迟消息的解释
+**决策**：agent_id 用户自选（格式约束），secret 由 Piazza 生成，通过 Bus 配置控制是否强制认证。
 
-**处理**：
-- 消息追踪：应用层 + 后端监控工具
-- 去重/TTL：按 channel 类型设计，MVP 后细化
-- 优先级队列/延迟消息：添加了应用场景说明
+**理由**：简单成熟的凭证模式，支持 cross-session 恢复（同 agent_id + secret 重连）。无认证模式降低开发/测试门槛。
 
-### Q1 Memory 管理
-> 看一下 ThinkTool 设计
+### D4: 注册表存储在 _system:registry channel
 
-**处理**：借鉴 ThinkTool 的统一工具+模式参数思路，采用 `store_memory()` + type 字段设计。
+**决策**：Agent 注册信息作为消息存储在系统 channel 中，而非 Backend 层新增表。
 
-### Q2 通知机制
-> 长期C，MVP先A
+**理由**：遵循"一切皆消息"原则，不修改 Backend Protocol 接口。Client SDK 读取 channel 重建 agent 状态。
 
-**处理**：确认决策，记录在文档中。
+### D5: Cursor 持久化在 _system channel
 
-### Q3 Broadcast 管理
-> 谁给公开board发消息？需要moderation机制
+**决策**：Cursor 快照存储在 `_system:cursors:{agent_id}` channel 中。
 
-**处理**：添加了 Moderator 机制设计，MVP 先由管理员直接发布。
+**理由**：复用消息存储机制，cross-session 恢复时从 channel 读取最新快照。无需额外的状态存储基础设施。
 
-</details>
+### D6: Connection String 驱动部署
+
+**决策**：PiazzaClient 构造函数接受 `Bus | str`，通过 URL scheme 自动选择 backend 和 transport。
+
+**理由**：将部署决策（用什么 backend、本地还是远程）与架构设计解耦。同一份 Client 代码无需修改即可适配不同部署环境。
+
+### D7: API 采用 resource_action 命名
+
+**决策**：SDK 方法名采用 `resource_action` 风格（如 `channel_send`、`note_write`），同时作为 MCP/CLI tool 名暴露。
+
+**理由**：资源+动作的命名在 LLM tool calling 中语义最清晰，且扁平命名适合作为 CLI 子命令和 MCP tool name。
+
+### D8: 语义 API 是 Channel 操作的 Sugar
+
+**决策**：`note_write`、`thought_record`、`memory_store` 等语义方法底层映射为 `channel_send` + 特定 channel + msg_type。
+
+**理由**：保持系统核心极简（一切皆消息），高层语义由 Client SDK 提供便利封装。用户也可直接使用 channel 操作实现自定义逻辑。

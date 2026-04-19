@@ -1,548 +1,764 @@
-# Agent Messaging Hub - Design Document
+# Agent Messaging Hub — Design Document
 
-## Project Overview
+## 1. Project Overview
 
-A messaging backbone system designed for LLMs/Agents, adopting a Hub-Client architecture. This project serves as the implementation of the **Messaging** component (Chapter 9) in the PhD dissertation *"Enabling Agentic AI at Scale through Decoupled Abstractions"*.
-
--   **Hub Server**: Manages message queues, persistence, and routing.
--   **Client SDK**: Encapsulates functionality into tools for agents (e.g., `send_message`, `read_channel`, `write_note`).
+Piazza is a messaging backbone system designed for LLMs/Agents, providing unified communication infrastructure for multi-agent collaboration. This project serves as the reference implementation of the **Messaging** component (Chapter 9) in the PhD dissertation *"Enabling Agentic AI at Scale through Decoupled Abstractions"*.
 
 ### Core Capabilities
--   Inter-Agent Communication (Group Chat / Direct Message)
--   Notebook/Scratch Pad
--   History Tracking
--   Memory Storage
--   Cognitive Process Recording (Thought)
--   Broadcast/Announcements
+
+- Inter-Agent Communication (Group Chat / Direct Message)
+- Notebook / Scratch Pad
+- History Tracking
+- Memory Storage
+- Cognitive Process Recording (Thought)
+- Broadcast / Announcements
+
+### Design Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Decoupled Abstractions** | All components defined by Protocol interfaces, not bound to specific implementations |
+| **Layered Responsibility** | Clear boundaries per layer: Backend handles storage & delivery, Bus handles orchestration, Client SDK handles business semantics |
+| **Connection String Driven** | Deployment decisions (which backend) are orthogonal to architecture, selected at runtime via connection strings |
+| **Progressive Enhancement** | Core functionality minimized, advanced capabilities introduced through optional interfaces |
 
 ---
 
-## Architectural Decisions
+## 2. System Architecture
 
-### 1. Adapter Layer
-
-To achieve flexible configuration and extensibility (aligning with the **Decoupled Abstractions** philosophy), the system employs the **Adapter Pattern** (Shim/Middleware). All replaceable components interface through a unified abstraction.
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    Hub Server                        │
-├─────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │  Backend    │  │  Storage    │  │ Serializer  │  │
-│  │  Adapter    │  │  Adapter    │  │  Adapter    │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
-│         │                │                │         │
-│         ▼                ▼                ▼         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │Redis/RabbitMQ│ │File/DB/S3  │  │JSON/MsgPack │  │
-│  │/RocketMQ    │  │            │  │/Protobuf    │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
-
-**Configuration** (via config field):
-```yaml
-hub:
-  backend:
-    type: redis  # redis | rabbitmq | rocketmq
-    url: redis://localhost:6379
-  storage:
-    type: file  # file | sqlite | s3
-    path: ./data
-    format: markdown  # markdown | binary
-  serializer:
-    type: json  # json | msgpack | protobuf
-```
-
-### 2. Message Backend
-
-**Priority Order**: Redis (Valkey) → RabbitMQ → RocketMQ
-
-| Phase | Backend | Rationale |
-|-------|---------|-----------|
-| MVP | Redis Streams | Simplest, easy deployment, sufficient functionality. |
-| Expansion | RabbitMQ | Mature MQ, rich routing capabilities. |
-| Scale | RocketMQ | High throughput, distributed scenarios. |
-
-**Deployment**: Docker containers, connecting to the backend via user-provided URLs.
-
-**Adapter Interface**:
-```python
-class BackendAdapter(Protocol):
-    def publish(self, channel: str, message: bytes) -> str: ...
-    def subscribe(self, channel: str) -> Iterator[bytes]: ...
-    def get_history(self, channel: str, limit: int) -> List[bytes]: ...
-```
-
-### 3. Persistence Strategy
-
-**Requirements**:
-1.  Human-readable and understandable ("White-box").
-2.  Recoverable after restart.
-3.  Simplifiable for testing.
-
-**Implementation**:
-| Mode | Format | Usage |
-|------|--------|-------|
-| Debug Mode | Markdown File | Development/Debugging, human-readable. |
-| Production Mode | Binary (MessagePack) | Performance optimization, compressed storage. |
-
-**Storage Adapter Interface**:
-```python
-class StorageAdapter(Protocol):
-    def save(self, key: str, data: bytes) -> None: ...
-    def load(self, key: str) -> Optional[bytes]: ...
-    def list_keys(self, prefix: str) -> List[str]: ...
-    def delete(self, key: str) -> None: ...
-```
-
-### 4. Serialization Format
-
-| Format | Speed | Size | Readability | Scenario |
-|--------|-------|------|-------------|----------|
-| JSON | Slow | Large | Good | Debugging, small scale, white-box. |
-| MessagePack | Fast | Small | Poor | Production environment. |
-| Protobuf | Fastest | Smallest | Poor | Large scale, strong typing. |
-
-**Decision**: Default to JSON, optional MessagePack for production.
-
-**Serializer Adapter Interface**:
-```python
-class SerializerAdapter(Protocol):
-    def encode(self, obj: Any) -> bytes: ...
-    def decode(self, data: bytes) -> Any: ...
-```
-
----
-
-## Channel Types
-
-| Channel Type | Naming Pattern | Usage | Access Control |
-|--------------|----------------|-------|----------------|
-| History | `history:{agent_id}` | Dialogue/Work log | Private, auto-written by SDK |
-| Notebook | `notebook:{agent_id}` | Scratch pad / Thoughts (includes Thought) | Private, agent writes actively |
-| Memory | `memory:{agent_id}` | Long-term memory (Semantic) | Private |
-| Broadcast | `broadcast:{topic}` | Announcements, tasks, member lists | Public Read-only |
-| Group | `group:{group_id}` | Group chat | Member Read/Write |
-| DM | `dm:{agent_a}:{agent_b}` | Direct message | Both parties Read/Write |
-
-### Cognitive Psychology Perspective: Notebook vs. Memory
-
-Based on cognitive psychology memory classification, we designed two core private channels:
+### 2.1 Layered Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Agent Cognitive System                    │
+│                     Delivery Layer                          │
+│            MCP / REST API / CLI / OpenAPI                   │
+│  (Exposes Client SDK capabilities to external consumers:   │
+│   LLMs, humans, scripts)                                   │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────────────┐      ┌─────────────────────┐       │
-│  │  Notebook Channel   │      │   Memory Channel    │       │
-│  │  (Episodic/Working) │      │    (Semantic/LTM)   │       │
-│  ├─────────────────────┤      ├─────────────────────┤       │
-│  │ • Note (General)    │      │ • Memory (Fact/Know)│       │
-│  │ • Thought (Process) │ ───▶ │   - fact            │       │
-│  │   - reasoning       │Distill│   - experience      │       │
-│  │   - planning        │      │   - decision        │       │
-│  │   - reflection      │      │   - preference      │       │
-│  │   - brainstorming   │      │                     │       │
-│  ├─────────────────────┤      ├─────────────────────┤       │
-│  │ Nature: Process,Temp│      │ Nature: Result,Perm  │       │
-│  │ TTL: Auto-expire    │      │ TTL: Long-term      │       │
-│  │ Analogy: Scratchpad │      │ Analogy: Notebook   │       │
-│  └─────────────────────┘      └─────────────────────┘       │
-│                                                              │
+│                    Client SDK Layer                          │
+│                     PiazzaClient                            │
+│  (Stateful wrapper: identity, cursors, channel naming,     │
+│   semantic business API)                                    │
+├─────────────────────────────────────────────────────────────┤
+│                       Bus Layer                             │
+│                         Bus                                 │
+│  (Orchestration: composes Backend + Serializer,            │
+│   provides pub/sub)                                        │
+├─────────────────────────────────────────────────────────────┤
+│                     Backend Layer                           │
+│          SQLite │ Redis │ RabbitMQ │ ...                     │
+│  (Message storage & delivery, unified through Protocol     │
+│   interface)                                                │
 └─────────────────────────────────────────────────────────────┘
+```
+
+Each layer depends only on the Protocol interface of the layer below, never on concrete implementations.
+
+### 2.2 Component Relationships
+
+```
+PiazzaClient(target)
+  │
+  ├── target = Bus object  → LocalTransport → Bus → Backend
+  ├── target = "piazza.db" → auto-create Bus(SQLiteBackend) → LocalTransport
+  ├── target = "redis://…" → auto-create Bus(RedisBackend) → LocalTransport
+  └── target = "http://…"  → RemoteTransport → PiazzaServer API
+```
+
+The Client SDK shields local/remote differences through the Transport abstraction, fully transparent to upper layers.
+
+---
+
+## 3. Core Components
+
+### 3.1 Message Model
+
+Messages are the fundamental data unit. All communication is carried out through messages.
+
+```python
+@dataclass(frozen=True)
+class Message:
+    id: str              # UUID v7 (time-ordered), used as cursor
+    channel: str         # Channel name
+    sender: str          # Sender's agent_id
+    msg_type: str        # Application-level message type
+    payload: str         # Message content (JSON string or plain text)
+    timestamp: str       # ISO 8601 timestamp
+    metadata: dict | None  # Optional extension fields
+```
+
+**Design Decisions**:
+
+- Message is immutable (frozen dataclass)
+- `id` uses UUID v7 for time-ordering, serving as the poll cursor
+- `msg_type` is a free-form string; semantics defined at the Client SDK layer
+- `metadata` carries structured extension information (e.g., display_name, tags)
+
+### 3.2 Backend Layer
+
+The Backend is the storage and delivery engine for messages. All Backends interface through a unified Protocol. The system makes no assumptions about whether the underlying store is a relational database, message queue, or in-memory structure.
+
+#### Backend Protocol
+
+```python
+class Backend(Protocol):
+    """Unified interface for message backends."""
+
+    def store(self, message: Message) -> None:
+        """Persist a message."""
+        ...
+
+    def query(
+        self, channel: str,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> list[Message]:
+        """Query messages by channel with cursor-based pagination."""
+        ...
+
+    def list_channels(self) -> list[str]:
+        """List all channels that contain messages."""
+        ...
+
+    def subscribe(
+        self, channel: str,
+        callback: Callable[[Message], None],
+    ) -> str:
+        """Register a message delivery callback, return subscription ID.
+
+        Different backends implement this according to their capabilities:
+        - Polling-based backends (SQLite): Bus layer provides in-process observer
+        - Native pub/sub backends (Redis): leverage native subscription
+        - Message queue backends (RabbitMQ): leverage consumer mechanism
+        """
+        ...
+
+    def unsubscribe(self, subscription_id: str) -> None:
+        """Cancel a subscription."""
+        ...
+
+    def close(self) -> None:
+        """Release resources."""
+        ...
+```
+
+> **Note**: `subscribe`/`unsubscribe` are currently implemented at the Bus layer as an in-process observer pattern, serving as the universal baseline for all backends. When a backend has native push capabilities, the Bus layer can delegate subscriptions to the backend for more efficient delivery.
+
+#### Available Backend Implementations
+
+| Backend | Connection String | Use Case |
+|---------|------------------|----------|
+| SQLiteBackend | `piazza.db` or `:memory:` | Development, testing, single-machine deployment, zero external deps |
+| MemoryBackend | `:memory:` (via Bus object) | Unit testing, ephemeral scenarios |
+| RedisBackend | `redis://host:port` | Multi-instance deployment, native pub/sub needed |
+| RabbitMQBackend | `amqp://host:port` | Enterprise-grade, complex routing, durable queues |
+| *Custom* | *Custom URL scheme* | Extend as needed |
+
+> **Selection Guide**: There is no priority ordering among backends. Choose based on deployment scenario: SQLite/Memory for development and testing (zero deps), SQLite for single-machine production, Redis for cross-instance communication, RabbitMQ for enterprise messaging guarantees.
+
+#### Adding a New Backend
+
+Implement the `Backend` protocol to integrate:
+
+```python
+class MyBackend:
+    def __init__(self, connection_url: str): ...
+    def store(self, message: Message) -> None: ...
+    def query(self, channel, after=None, limit=100) -> list[Message]: ...
+    def list_channels(self) -> list[str]: ...
+    def close(self) -> None: ...
+
+# Usage
+bus = Bus(backend=MyBackend("custom://..."))
+```
+
+### 3.3 Serializer
+
+The Serializer handles encoding/decoding of metadata dictionaries.
+
+```python
+class Serializer(Protocol):
+    def encode(self, obj: dict) -> str: ...
+    def decode(self, data: str) -> dict: ...
+```
+
+| Serializer | Characteristics | Use Case |
+|-----------|----------------|----------|
+| JSONSerializer | Human-readable, debug-friendly | Default, suitable for dev and production |
+| MessagePackSerializer | Compact, efficient | High-throughput scenarios |
+| *Custom* | As needed | Special protocol requirements |
+
+### 3.4 Bus Layer
+
+The Bus is the orchestration layer, composing Backend and Serializer to provide a unified message publish/query interface.
+
+```python
+class Bus:
+    def __init__(
+        self,
+        backend: Backend | None = None,      # Default: SQLiteBackend(:memory:)
+        serializer: Serializer | None = None, # Default: JSONSerializer
+        require_auth: bool = False,           # Authentication mode toggle
+    ): ...
+
+    # Core operations
+    def publish(self, channel, sender, msg_type, payload, metadata=None) -> str
+    def poll(self, channel, after=None, limit=100) -> list[Message]
+    def subscribe(self, channel, callback) -> str
+    def unsubscribe(self, subscription_id) -> None
+    def channels(self) -> list[str]
+
+    # Lifecycle
+    def close(self) -> None
+    def __enter__ / __exit__  # context manager
+
+    # Properties
+    @property backend -> Backend
+    @property serializer -> Serializer
+```
+
+**Bus Layer Responsibility Boundaries**:
+
+- ✅ Message ID generation (UUID v7)
+- ✅ Timestamp generation
+- ✅ Message routing to Backend
+- ✅ In-process pub/sub (universal baseline)
+- ✅ Authentication mode control
+- ❌ No channel naming validation (Client SDK's responsibility)
+- ❌ No agent identity management (Client SDK's responsibility)
+- ❌ No cursor state tracking (Client SDK's responsibility)
+
+### 3.5 Client SDK Layer (PiazzaClient)
+
+PiazzaClient is the core interface for agents/LLMs, providing stateful message operation wrappers.
+
+#### 3.5.1 Connection Model
+
+PiazzaClient's constructor accepts either a `Bus` object or a connection string, automatically selecting the appropriate Transport:
+
+```python
+# Mode 1: Pass Bus object (orchestrator pattern)
+bus = Bus(backend=SQLiteBackend("data.db"))
+client = PiazzaClient(bus, "coder-1")
+
+# Mode 2: Pass connection string (auto-creates Bus)
+client = PiazzaClient("piazza.db", "coder-1")
+client = PiazzaClient(":memory:", "coder-1")
+client = PiazzaClient("redis://localhost:6379", "coder-1")
+client = PiazzaClient("amqp://localhost", "coder-1")
+
+# Mode 3: Connect to remote PiazzaServer
+client = PiazzaClient("http://piazza:8741", "coder-1", secret="sk-xxx")
+```
+
+Internal routing via Transport abstraction:
+
+```
+Target Type                → Transport         → Bus Lifecycle
+───────────────────────────────────────────────────────────────
+Bus object                 → LocalTransport    → Caller manages
+File path / :memory:       → LocalTransport    → Client creates & manages
+redis:// / amqp://         → LocalTransport    → Client creates & manages
+http:// / https://         → RemoteTransport   → Remote Server manages
+```
+
+Transport is a purely internal abstraction; users never interact with it directly.
+
+#### 3.5.2 Identity & Authentication
+
+##### Identity Model
+
+```
+agent_id      Unique system identifier, user-chosen, format-constrained
+              (lowercase alphanumeric + hyphens, 3-64 characters)
+secret        Piazza-generated credential, stored as SHA256 hash
+display_name  Optional display name, can duplicate, defaults to agent_id
+```
+
+Analogy: agent_id ≈ WeChat ID (unique), display_name ≈ nickname (can duplicate).
+
+##### Registration & Connection
+
+```python
+# First-time registration
+client, secret = PiazzaClient.register(target, "coder-1", display_name="Code Bot")
+# → Generates secret, writes to _system:registry channel
+# → Caller saves secret (env var / config)
+
+# Reconnect with secret (cross-session recovery)
+client = PiazzaClient(target, "coder-1", secret="sk-xxx")
+# → Validates secret → restores cursors → resumes
+
+# No-auth mode (when Bus require_auth=False)
+client = PiazzaClient(target, "coder-1")
+# → Skips authentication, direct use
+```
+
+##### Authentication Mode
+
+Controlled via Bus startup configuration:
+
+```python
+# Development/Testing: no auth (default)
+bus = Bus(require_auth=False)
+
+# Production/Shared service: mandatory auth
+bus = Bus(require_auth=True)
+```
+
+##### Registry Storage
+
+Agent registration information is stored in the `_system:registry` channel, following the "everything is a message" principle:
+
+```python
+# Message written during registration
+channel = "_system:registry"
+sender = agent_id
+msg_type = "register"
+metadata = {
+    "display_name": "Code Bot",
+    "secret_hash": "sha256:...",
+    "action": "register",  # register | deregister | update
+}
+```
+
+The Client SDK reads this channel to build the current agent state map.
+
+##### Secret Management
+
+```python
+# Reserved interfaces (not yet implemented in MVP)
+client.rotate_secret() -> str      # raises NotImplementedError
+client.revoke() -> None            # raises NotImplementedError
+```
+
+#### 3.5.3 Channel Types & Naming
+
+Channel naming rules are enforced at the **Client SDK layer**; the Bus layer performs no validation.
+
+| Channel Type | Naming Pattern | Usage | Access Control |
+|-------------|----------------|-------|----------------|
+| History | `history:{agent_id}` | Dialogue/Work log | Private, auto-written by SDK |
+| Notebook | `notebook:{agent_id}` | Thinking process, temp notes (incl. Thought) | Private, agent writes actively |
+| Memory | `memory:{agent_id}` | Long-term memory (Semantic) | Private |
+| Broadcast | `broadcast:{topic}` | Announcements, task lists, member lists | Public read-only |
+| Group | `group:{group_id}` | Group chat | Member read/write |
+| DM | `dm:{agent_a}:{agent_b}` | Direct message (IDs lexicographically sorted) | Both parties read/write |
+| System | `_system:{purpose}` | Internal management (registry, cursors, etc.) | System internal |
+
+##### Notebook vs Memory (Cognitive Psychology Perspective)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                  Agent Cognitive System                    │
+├──────────────────────────────────────────────────────────┤
+│                                                           │
+│  ┌─────────────────────┐    ┌─────────────────────┐      │
+│  │  Notebook Channel   │    │   Memory Channel    │      │
+│  │  (Episodic/Working) │    │   (Semantic/LTM)    │      │
+│  ├─────────────────────┤    ├─────────────────────┤      │
+│  │ • Note (General)    │    │ • Memory (Fact/Know)│      │
+│  │ • Thought (Process) │───▶│   - fact            │      │
+│  │   - reasoning       │Dist│   - experience      │      │
+│  │   - planning        │ill │   - decision        │      │
+│  │   - reflection      │    │   - preference      │      │
+│  │   - brainstorming   │    │                     │      │
+│  ├─────────────────────┤    ├─────────────────────┤      │
+│  │ Nature: Process,Temp│    │ Nature: Result,Perm │      │
+│  │ Analogy: Scratchpad │    │ Analogy: Notebook   │      │
+│  └─────────────────────┘    └─────────────────────┘      │
+│                                                           │
+└──────────────────────────────────────────────────────────┘
 ```
 
 | Dimension | Notebook (Episodic) | Memory (Semantic) |
 |-----------|---------------------|-------------------|
-| **Memory Type** | Episodic Memory / Working Memory | Semantic Memory / Long-term Memory |
-| **Content** | Thinking process, temporary notes, drafts | Distilled conclusions, facts, knowledge |
+| **Memory Type** | Episodic / Working Memory | Semantic / Long-term Memory |
+| **Content** | Thinking process, temp notes, drafts | Distilled conclusions, facts, knowledge |
 | **Structure** | Can be messy streams of thought | Should be structured and concise |
 | **Timeliness** | Disposable, auto-expirable | Persistently retained |
-| **Usage** | Debugging, white-box, review | Future recall, knowledge reuse |
-| **Analogy** | Calculations on scratch paper | Organized notes in a notebook |
 
-**Design Decision**: Thoughts are stored in the Notebook channel because:
-1.  The original intent of a Notebook is a "scratch pad / thoughts".
-2.  Thoughts and Notes are both temporary, process-oriented content.
-3.  They can be distinguished by message type (Note vs. Thought).
+#### 3.5.4 API Design
 
-### Broadcast Channel Management
+PiazzaClient adopts a **resource\_action** naming style (e.g., `channel_send`, `note_write`), balancing SDK readability with intuitive exposure as MCP/CLI tools.
 
-**Problem**: Who sends messages to the public board?
+##### Core API: Channel Operations
 
-**Solution**: Introduce a **Moderator Mechanism**.
+The foundation of all communication — direct operations on channels:
 
-```
-Agent A ─────┐
-Agent B ─────┼──▶ [Submission Queue] ──▶ [Moderator] ──▶ [Broadcast Channel]
-Agent C ─────┘           │                    │
-                         │                    ▼
-                         │              Review/Filter/Classify
-                         │                    │
-                         ▼                    ▼
-                   broadcast:submissions   broadcast:announcements
-                                           broadcast:tasks
-                                           broadcast:members
+```python
+# Send a message to a channel
+channel_send(channel: str, content: str, msg_type: str = "chat",
+             metadata: dict | None = None) -> str
+
+# Read channel messages (random access, does NOT advance cursor)
+channel_read(channel: str, limit: int = 10,
+             after: str | None = None) -> list[Message]
+
+# Incremental poll (cursor auto-advances, for tracking new messages)
+channel_poll(channel: str) -> list[Message]
+
+# List all channels
+channel_list() -> list[str]
 ```
 
--   **Submission Queue**: Any agent can submit to `broadcast:submissions`.
--   **Moderator Agent**: A system-builtin management agent responsible for reviewing, classifying, and publishing.
--   **MVP Simplification**: No Moderator initially; Broadcasts are manually published by admins or directly via API.
+##### Semantic API: High-level Business Operations
+
+The following methods are semantic wrappers (syntactic sugar) over channel operations, auto-routing to the appropriate channel with the correct `msg_type`:
+
+```python
+# ── Notebook (writes to notebook:{agent_id}) ──
+note_write(content: str, tags: list[str] | None = None) -> str
+note_read(tags: list[str] | None = None, limit: int = 10) -> list[Message]
+
+# ── Thought (writes to notebook:{agent_id}, msg_type="thought") ──
+thought_record(
+    thinking_mode: str,    # reasoning | planning | reflection | recalling | brainstorming | exploring
+    focus_area: str,
+    thought_process: str,
+) -> str
+thought_read(limit: int = 10) -> list[Message]
+
+# ── Memory (writes to memory:{agent_id}) ──
+memory_store(content: str, memory_type: str = "general") -> str
+memory_recall(query: str, limit: int = 5) -> list[Message]
+# Semantic search for memory_recall is provided by external components
+# (e.g., mem0). Client SDK provides only the interface definition;
+# default implementation returns messages in reverse chronological order.
+
+# ── DM (writes to dm:{sorted_pair}) ──
+dm_send(to_agent: str, content: str) -> str
+dm_read(with_agent: str, limit: int = 10) -> list[Message]
+
+# ── Group ──
+group_create(name: str, members: list[str]) -> str
+group_send(group_id: str, content: str) -> str
+group_read(group_id: str, limit: int = 10) -> list[Message]
+
+# ── Broadcast ──
+broadcast_list() -> list[str]
+broadcast_read(topic: str, limit: int = 10) -> list[Message]
+
+# ── Notification ──
+notification_check() -> list[Message]
+```
+
+##### Mapping Between Semantic API and Channel Operations
+
+```
+note_write(content, tags)
+  → channel_send(f"notebook:{self.agent_id}", content, msg_type="note",
+                  metadata={"tags": tags})
+
+thought_record(mode, focus, process)
+  → channel_send(f"notebook:{self.agent_id}", process, msg_type="thought",
+                  metadata={"thinking_mode": mode, "focus_area": focus})
+
+memory_store(content, memory_type)
+  → channel_send(f"memory:{self.agent_id}", content, msg_type="memory",
+                  metadata={"memory_type": memory_type})
+
+dm_send(to_agent, content)
+  → channel_send(f"dm:{sorted_pair}", content, msg_type="chat")
+```
+
+#### 3.5.5 Cursor Management
+
+PiazzaClient maintains per-channel cursors for incremental message reading.
+
+##### Two Read Modes
+
+| Method | Cursor | Scenario |
+|--------|--------|----------|
+| `channel_poll(channel)` | ✅ Auto-advances | Track new messages continuously (primary use) |
+| `channel_read(channel, ...)` | ❌ Does not advance | Random access, browse history, conditional queries |
+
+##### Cursor Persistence
+
+Cursor state is stored in the `_system:cursors:{agent_id}` channel for cross-session recovery:
+
+```python
+# Client SDK periodically or at key points persists cursors
+channel_send(
+    f"_system:cursors:{self.agent_id}",
+    json.dumps(self._cursors),  # {"channel_a": "last_msg_id", ...}
+    msg_type="cursor_snapshot",
+)
+
+# On reconnect, reads the latest snapshot from the channel to restore
+```
+
+**Cross-session Recovery Flow**:
+
+```
+Agent dies
+  → Respawn
+  → Create PiazzaClient with same agent_id + secret
+  → _announce() writes new register message
+  → _restore_cursors() reads latest snapshot from _system:cursors:{agent_id}
+  → channel_poll() resumes from the breakpoint
+```
+
+### 3.6 Delivery Layer
+
+The Delivery Layer exposes Client SDK capabilities to external consumers.
+
+```
+┌────────────────────────────────────────────────────┐
+│                 PiazzaClient SDK                   │
+├───────────┬───────────┬───────────┬────────────────┤
+│    MCP    │ REST API  │   CLI     │   OpenAPI      │
+│  Server   │  Server   │ (Tier 2)  │   Schema       │
+│           │           │           │                │
+│  LLM via  │  HTTP     │  LLM via  │  Swagger /     │
+│  MCP tool │  clients  │  bash tool│  code-gen      │
+└───────────┴───────────┴───────────┴────────────────┘
+```
+
+#### CLI Two-Tier Design
+
+| Tier | Target User | Functions |
+|------|------------|-----------|
+| **Tier 1: Operations** | DevOps | `piazza serve`, `piazza status`, `piazza admin` |
+| **Tier 2: SDK-over-CLI** | LLMs (via bash tool) | SDK methods mapped to CLI commands, e.g., `piazza channel send ...` |
+
+#### Delivery Channels
+
+PiazzaClient methods can be uniformly exposed as MCP tools, REST APIs, and CLI commands via toolregistry-server, without writing separate adapter code for each protocol.
 
 ---
 
-## Communication Patterns
+## 4. Communication Patterns
 
 ### Sync vs. Async
 
 | Scenario | Pattern | Description |
 |----------|---------|-------------|
-| Sending messages to others | Async fire-and-forget | Like sending Slack/Email. |
-| Querying own memory/notebook | Sync query | Read operation, not message passing. |
-| Waiting for replies | Async + Polling/Notify | Provide `check_notifications()` tool. |
+| Sending messages to others | Async fire-and-forget | Like sending Slack/Email |
+| Querying own memory/notebook | Sync query | Read operation, not message passing |
+| Waiting for replies | Async + Polling/Notify | Provide `notification_check()` |
 
-**Core Principle**: Message sending is asynchronous, but data querying is synchronous.
+**Core Principle**: Message sending is asynchronous; data querying is synchronous.
 
 ### Notification Mechanism
 
-**Decision**:
--   **Long-term Goal**: C (Active polling + Notification attached to return values).
--   **MVP Implementation**: A (`check_notifications()` tool, agent actively polls).
+- **MVP**: `notification_check()` active polling
+- **Future**: Active polling + notifications attached to return values (requires Agent SDK layer support)
 
-> 💡 **Note**: Scheme B (injecting notifications into all tool returns) requires either restricting to hub-related tools or dependency on agent framework support. MVP uses simple polling.
+### Broadcast Channel Management
+
+**MVP**: Broadcasts published directly by admins / API.
+
+**Future**: Introduce a Moderator Agent mechanism — agents submit to `broadcast:submissions`, Moderator reviews and publishes to the appropriate broadcast channel.
 
 ---
 
-## Message Types
+## 5. Message Types
 
-Based on communication pattern requirements, the following message types are supported:
+`msg_type` is a free-form string. The following are the standard conventional types:
 
-| Type | Description | Usage |
-|------|-------------|-------|
-| `ChatMessage` | Chat message | Group chat / Direct message |
-| `Note` | Note/Memo | Notebook scratch pad |
-| `Memory` | Memory entry | Long-term memory storage |
-| `Thought` | Cognitive process record | White-box thinking process (Ref: ThinkTool) |
-| `Broadcast` | Broadcast message | Announcements / Tasks / Member lists |
-| `TaskRequest` | Task request | Task distribution |
-| `TaskResult` | Task result | Task completion feedback |
-| `Notification` | Notification | New message / Event alert |
-| `Heartbeat` | Heartbeat | Liveness check |
+| Type | Description | Typical Channel |
+|------|-------------|-----------------|
+| `chat` | Chat message | group:\*, dm:\* |
+| `note` | Note/Memo | notebook:\* |
+| `thought` | Cognitive process record | notebook:\* |
+| `memory` | Memory entry | memory:\* |
+| `broadcast` | Broadcast message | broadcast:\* |
+| `task_request` | Task request | group:\*, dm:\* |
+| `task_result` | Task result | group:\*, dm:\* |
+| `notification` | Notification | _system:\* |
+| `heartbeat` | Heartbeat | _system:\* |
+| `register` | Agent registration | _system:registry |
+| `cursor_snapshot` | Cursor snapshot | _system:cursors:\* |
 
 ### Thought Type Design (Inspired by ThinkTool)
 
-**Design Philosophy**: Transforming the agent's thinking process from a "Black Box" to a "White Box".
+**Design Philosophy**: Transform the agent's thinking process from "black box" to "white box".
 
 ```python
-class Thought:
-    thinking_mode: str  # reasoning | planning | reflection | recalling | brainstorming | exploring
-    focus_area: str     # Current problem/topic
-    thought_process: str  # Detailed thinking process
-    timestamp: datetime
-    agent_id: str
-```
+# Written via thought_record()
+thought_record(
+    thinking_mode="reasoning",    # reasoning | planning | reflection | ...
+    focus_area="API design evaluation",
+    thought_process="Considered three approaches...",
+)
 
-**Storage Location**: Notebook channel (`notebook:{agent_id}`)
-
-**Relationship with Other Types**:
-
-| Type | Storage Location | Nature | Description |
-|------|------------------|--------|-------------|
-| **Note** | Notebook | Episodic | General notes, temporary records |
-| **Thought** | Notebook | Episodic | Structured thinking process (CoT persistence) |
-| **Memory** | Memory | Semantic | Distilled conclusions, facts, knowledge |
-
-**Typical Workflow**:
-
-```
-[Thinking Process] ──record_thought()──▶ Notebook Channel
-        │                                  (episodic)
-        │
-        ▼ Model summarizes/distills
-        │
-[Conclusion Reached] ──store_memory()──▶ Memory Channel
-                                          (semantic)
+# Stored as Message:
+# channel = "notebook:{agent_id}"
+# msg_type = "thought"
+# payload = thought_process
+# metadata = {"thinking_mode": "reasoning", "focus_area": "API design evaluation"}
 ```
 
 ---
 
-## SDK Design
+## 6. Deployment Modes
 
-### Concurrency Model
+### 6.1 Embedded (In-process)
 
-| Mode | Description | Priority |
-|------|-------------|----------|
-| Sync | `msg = client.read_channel("xxx")` blocks waiting | MVP Implementation |
-| Async | `msg = await client.read_channel("xxx")` | Future Support |
-
-### Client Tools (MCP/OpenAPI)
+All agents run in the same process, sharing a Bus object.
 
 ```python
-# ===== Message Sending =====
-send_message(channel: str, content: str, type: MessageType) -> MessageId
-send_dm(to_agent: str, content: str) -> MessageId
-
-# ===== Message Reading =====
-read_channel(channel: str, limit: int = 10) -> List[Message]
-read_dm(with_agent: str, limit: int = 10) -> List[Message]
-
-# ===== Notebook Operations (Episodic/Working Memory) =====
-write_note(content: str, tags: List[str] = None) -> NoteId
-read_notes(tags: List[str] = None, limit: int = 10) -> List[Note]
-
-# Thought is also stored in Notebook channel (Structured Note)
-record_thought(
-    thinking_mode: str,  # reasoning | planning | reflection | recalling | ...
-    focus_area: str,
-    thought_process: str
-) -> ThoughtId  # Underlying write to notebook:{agent_id}
-
-read_thoughts(limit: int = 10) -> List[Thought]
-
-# ===== Memory Operations (Semantic/Long-term Memory) =====
-store_memory(content: str, type: str = "general") -> MemoryId
-# type: general | fact | experience | decision | preference | ...
-recall_memory(query: str, limit: int = 5) -> List[Memory]
-
-# ===== Notifications =====
-check_notifications() -> List[Notification]
-
-# ===== Broadcast Discovery =====
-list_broadcasts() -> List[BroadcastChannel]  # Get list of all public channels
-read_broadcast(topic: str, limit: int = 10) -> List[Broadcast]
-
-# ===== Group Management =====
-create_group(name: str, members: List[str]) -> GroupId
-join_group(group_id: str) -> bool
-leave_group(group_id: str) -> bool
-list_groups() -> List[Group]  # Get groups I have joined
+bus = Bus(backend=SQLiteBackend("data.db"))
+client_a = PiazzaClient(bus, "coder-1")
+client_b = PiazzaClient(bus, "reviewer-1")
 ```
 
-### Message Interruption Mechanism (Agent SDK Level)
+- Simplest, zero network overhead
+- Subscribe callbacks fire synchronously in-process
+- Suitable for single-machine multi-agent orchestration
 
-> 💡 **Note**: The message interruption mechanism is a function of the Agent SDK, not the Messaging Hub core. However, the Hub can provide support:
+### 6.2 Multi-process Shared Storage
 
--   **Priority Field**: Messages can carry priority tags.
--   **Interrupt Channel**: A dedicated high-priority notification channel `interrupt:{agent_id}`.
--   **Agent SDK Implementation**: Check the interrupt channel before every tool call.
+Each process independently creates a Client pointing to the same storage.
 
----
+```python
+# Process A
+client_a = PiazzaClient("shared/piazza.db", "coder-1")
 
-## Error Handling
+# Process B
+client_b = PiazzaClient("shared/piazza.db", "reviewer-1")
+```
 
-**Message Processing Failure Scenarios**:
--   Network timeout.
--   Hub service unavailable.
--   Message format error.
+- Concurrent read/write supported via SQLite WAL mode
+- Subscribe only works in-process; cross-process uses `channel_poll()`
+- Suitable for single-machine multi-process scenarios
 
-**MVP Strategy**: Simple retry + return error to agent, letting the agent decide how to handle it.
+### 6.3 Persistent Service (PiazzaServer)
 
-Future expansion to Dead Letter Queues (DLQ) or configurable strategies.
+Centralized service with Clients connecting via network API.
 
----
+```python
+# Server side
+bus = Bus(backend=SQLiteBackend("data.db"), require_auth=True)
+server = PiazzaServer(bus, host="0.0.0.0", port=8741)
 
-## Extra Feature Priorities
+# Client side (any machine)
+client = PiazzaClient("http://piazza:8741", "coder-1", secret="sk-xxx")
+```
 
-| Feature | Priority | Description |
-|---------|----------|-------------|
-| Message Tracing | High | Application-level tracing + Backend monitoring tools (e.g., Redis Commander, RabbitMQ Management). |
-| Message Expiry/TTL | Medium | Designed by channel type and session; refined after MVP. |
-| Deduplication | Low | Distinguished by channel type requirements; not implemented initially. |
-| Priority Queue | Low | See explanation below. |
-| Delayed Message | Low | See explanation below. |
-
-### Priority Queue Use Cases
-
-Used when certain messages need prioritized processing:
--   **Urgent Tasks**: High-priority tasks jumping the queue.
--   **Message Interruption**: Important notifications delivered first.
--   **Resource Scheduling**: VIP agent requests responded to first.
-
-**MVP**: Not needed. Current scenarios are simple; FIFO is sufficient.
-
-### Delayed Message Use Cases
-
-Used when a message needs to be triggered at a future point in time:
--   **Scheduled Reminders**: Remind self in 10 minutes.
--   **Retry Mechanism**: Retry N seconds after failure.
--   **Task Scheduling**: Schedule tasks for future execution.
-
-**MVP**: Not needed. No explicit scheduled scenario requirements currently.
+- Suitable for multi-machine deployment, cloud environments
+- Authentication mandatory
+- Can pair with Redis/RabbitMQ backend for high availability
 
 ---
 
-## Deployment
+## 7. Configuration
 
-| Method | Description |
-|--------|-------------|
-| CLI | Run `agent-hub serve` directly. |
-| Docker | Encapsulation of CLI, `docker run agent-hub`. |
-| K8s | Helm chart (Future). |
+### 7.1 Connection String (Current)
 
-> 📋 **Future Plan**: Design `docs/API.md` to define detailed API interfaces and naming conventions.
+The Client SDK selects backends via connection strings, integrating configuration into code:
 
----
+```python
+PiazzaClient("piazza.db", agent_id)           # SQLite
+PiazzaClient(":memory:", agent_id)             # Memory
+PiazzaClient("redis://host:6379", agent_id)    # Redis
+PiazzaClient("amqp://host:5672", agent_id)     # RabbitMQ
+PiazzaClient("http://host:8741", agent_id)     # Remote service
+```
 
-## Decision Summary
+### 7.2 Configuration File (Future, for PiazzaServer deployment)
 
-### Q1: Memory Management ✅
+Server-side deployment will support YAML/TOML configuration files:
 
-**Decision**: MVP uses simple key-value storage + type field classification.
+```yaml
+# piazza.yaml (reserved design, not yet implemented)
+server:
+  host: 0.0.0.0
+  port: 8741
+  require_auth: true
 
-Borrowing from ThinkTool design:
--   Unified `store_memory()` interface.
--   Distinguish memory types via `type` parameter (general/fact/experience/...).
--   Reuse ThinkTool's `recalling` mode for memory recall.
+backend:
+  url: redis://localhost:6379
+  # url format follows connection string convention
 
-Future introduction of a specialized Memory Agent for intelligent management.
+serializer:
+  type: json  # json | msgpack
 
-### Q2: Notification Mechanism ✅
+logging:
+  level: info
+```
 
-**Decision**: MVP implements Scheme A (`check_notifications()` polling), long-term support for Scheme C.
-
-### Q3: Channel Types ✅
-
-**Decision**: 6 types satisfy requirements; added Broadcast Moderator mechanism description.
-
-In MVP phase, Broadcasts are published directly by admins/API; Moderator Agent introduced later.
-
----
-
-## Appendix: Original Requirements Discussion
-
-<details>
-<summary>Click to expand original Q&A record</summary>
-
-### 1. Message Backend Priority
-
-**Question**: Which backend do you want to support first? What is the subsequent expansion order?
-
-**Answer**: Redis (Valkey) -> RabbitMQ -> RocketMQ. For MVP, just the simplest one is needed. Find the most mature one. Since we deploy backends via docker and access via user-provided URL. For each agent, it sees a set of tools. We will also manually call these tools in the subsequent agent sdk design for partial manual management.
-
-### 2. Message Persistence Requirements
-
-**Question**: Do Agent messages/memories need persistence?
-
-**Answer**: Persistence is mandatory. The purpose is:
-1. To be visible and understandable by humans, so we can "white-box" this mechanism. Persistence mode should be optional: binary (most compressed) or md file.
-2. Recoverable after restart.
-3. Persistence can be very simple during testing.
-
-### 3. Agent Communication Patterns
-
-**Question**: What is your expected main communication pattern?
-
-**Answer**: Every agent accessing this system should have the following capabilities:
-- A channel for history recording.
-- A notebook for recording thoughts or important things.
-- A memory channel.
-- Ability to see public broadcast channels.
-- Option to create "group" chats.
-- Option to create point-to-point chats.
-
-### 4. Message Types
-
-**Answer**: Based on communication pattern expectations, we probably need all of them.
-
-### 5. Sync vs Async
-
-**Answer**: Should be asynchronous, similar to humans sending slack or email. But a notification mechanism is needed. For memory query, it is synchronous (read operation).
-
-### 6. Serialization Format
-
-**Answer**: Considering massive message access from multiple agents, performance and stability are important.
-
-### 7. API Style
-
-**Answer**: Hub and client should be separated. For models, they only see the client; the hub is on the server.
-
-### 8. Concurrency Model
-
-**Answer**: Clarified - refers to Client SDK implementation. Sync first, then asyncio support.
-
-### 9. Error Handling
-
-**Answer**: Clarified - MVP phase simple retry + return error to agent.
-
-### 10. Extra Feature Priorities
-
-**Answer**: Analyzed - Message Tracing (High) > TTL (Medium) > Deduplication/Priority/Delay (Low).
-
-### 11. Deployment Environment
-
-**Answer**: Provide both cli and docker. Docker as encapsulation of cli.
-
-### 12. Integration with Existing Systems
-
-**Answer**: Exposed to models based on openapi or mcp interfaces. Consider backend hub server design and client toolset design.
-
-</details>
+Configuration files ultimately resolve to connection strings + constructor parameters; both approaches are equivalent.
 
 ---
 
-## Appendix: Design Feedback Record
+## 8. Error Handling
 
-<details>
-<summary>Click to expand user feedback</summary>
+**MVP Strategy**: Simple retry + return error to agent; agent decides how to handle.
 
-### Message Backend
-> We need to pay attention to providing a middleware/shim to interface with various backends, configured via config field.
+**Future Extensions**:
+- Dead Letter Queue (DLQ)
+- Configurable retry strategies
+- Message delivery acknowledgment
 
-**Action**: Added Adapter Layer design, including Backend/Storage/Serializer Adapters.
+---
 
-### Persistence Strategy
-> This persistence might also need a flexible shim, configured via config field. Should it be called shim or middleware?
+## 9. Extension Roadmap
 
-**Action**: Unified term "Adapter", which is a more accurate design pattern name. Added Storage Adapter interface.
+| Feature | Description | Dependency |
+|---------|-------------|------------|
+| Secret Rotation | rotate_secret() / revoke() | Client SDK |
+| Message TTL | Per-channel-type expiration policies | Backend |
+| Message Tracing | Distributed trace IDs | Message metadata |
+| Priority Queue | Urgent message queue jumping | Backend |
+| Delayed Messages | Scheduled delivery | Backend |
+| Moderator Agent | Broadcast review mechanism | Client SDK |
+| Async API | asyncio support | Full stack |
+| Message Interruption | interrupt:{agent_id} channel + priority | Agent SDK layer |
+| Per-channel Aliases | Similar to WeChat group cards | Client SDK |
+| Agent Heartbeat | Liveness detection and expiration | Client SDK |
 
-### Serialization Format
-> This also needs a shim/middleware, configured via config field.
+---
 
-**Action**: Added Serializer Adapter interface.
+## 10. Decision Log
 
-### Message Types
-> Do we need to add a Thought type?
+### D1: Backend and Storage Merged
 
-**Action**: Added Thought type, borrowing ThinkTool's design philosophy (white-boxing the thinking process).
+**Decision**: Backend = transport + persistence combined; no separate Storage abstraction layer.
 
-### SDK Design
-> How to know about public channels? Message interruption mechanism?
+**Rationale**: All current backends (SQLite, Redis Streams, RabbitMQ) inherently include persistence. If a future pure-transport backend (e.g., MQTT) needs independent storage, it can compose internally without affecting the Protocol interface.
 
-**Action**:
-- Added `list_broadcasts()` API.
-- Clarified that message interruption belongs to the Agent SDK level; Hub can provide priority/interrupt support.
+**Evolution Path**: When transport and persistence separation is genuinely needed (e.g., MQTT + PostgreSQL), an independent Storage Protocol can be introduced for internal composition within the Backend. The current Protocol interface requires no changes.
 
-### Extra Features
-> Explanation of message tracing, deduplication, TTL, priority queue, delayed messages.
+### D2: Channel Naming Enforced at Client SDK Layer
 
-**Action**:
-- Message Tracing: Application layer + Backend monitoring tools.
-- Deduplication/TTL: Designed by channel type, refined after MVP.
-- Priority Queue/Delayed Message: Added use case explanations.
+**Decision**: The Bus layer accepts any channel name; naming rules are validated and enforced by the Client SDK layer.
 
-### Q1 Memory Management
-> Look at ThinkTool design.
+**Rationale**: The Bus layer remains generic without embedding business semantics. Channel naming is an application-layer convention; different applications may have different naming requirements.
 
-**Action**: Borrowed ThinkTool's unified tool + mode parameter idea, adopting `store_memory()` + type field design.
+### D3: Identity Authentication via agent_id + secret
 
-### Q2 Notification Mechanism
-> Long-term C, MVP first A.
+**Decision**: agent_id is user-chosen (format-constrained), secret is Piazza-generated, and authentication enforcement is controlled via Bus configuration.
 
-**Action**: Confirmed decision, recorded in document.
+**Rationale**: Simple, mature credential pattern supporting cross-session recovery (reconnect with same agent_id + secret). No-auth mode lowers the development/testing barrier.
 
-### Q3 Broadcast Management
-> Who sends messages to public board? Need moderation mechanism.
+### D4: Registry Stored in _system:registry Channel
 
-**Action**: Added Moderator mechanism design; MVP published directly by admin.
+**Decision**: Agent registration information is stored as messages in a system channel, not as a new table in the Backend layer.
 
-### Thought Storage Location
-> Should we add a new channel or reuse memory or note to store thoughts?
+**Rationale**: Follows the "everything is a message" principle without modifying the Backend Protocol interface. The Client SDK reads the channel to reconstruct agent state.
 
-**Action**:
-- **Decision**: Reuse Notebook channel.
-- **Rationale**: Notebook is Episodic/Working Memory, suitable for storing process-oriented Thoughts. Memory is Semantic/Long-term Memory, suitable for storing results.
-- **Implementation**: Distinguish via message type (Note vs Thought) within the Notebook channel.
+### D5: Cursor Persistence in _system Channel
 
-</details>
+**Decision**: Cursor snapshots are stored in the `_system:cursors:{agent_id}` channel.
+
+**Rationale**: Reuses the message storage mechanism; cross-session recovery reads the latest snapshot from the channel. No additional state storage infrastructure needed.
+
+### D6: Connection String Driven Deployment
+
+**Decision**: PiazzaClient constructor accepts `Bus | str`, automatically selecting backend and transport based on URL scheme.
+
+**Rationale**: Decouples deployment decisions (which backend, local vs. remote) from architectural design. The same Client code adapts to different deployment environments without modification.
+
+### D7: API Adopts resource_action Naming
+
+**Decision**: SDK method names use `resource_action` style (e.g., `channel_send`, `note_write`), simultaneously serving as MCP/CLI tool names.
+
+**Rationale**: Resource + action naming provides the clearest semantics for LLM tool calling, and flat naming is well-suited for CLI subcommands and MCP tool names.
+
+### D8: Semantic API is Sugar over Channel Operations
+
+**Decision**: `note_write`, `thought_record`, `memory_store` and other semantic methods map to `channel_send` + specific channel + msg_type underneath.
+
+**Rationale**: Keeps the system core minimal (everything is a message); high-level semantics are provided as convenience wrappers by the Client SDK. Users can also use channel operations directly for custom logic.

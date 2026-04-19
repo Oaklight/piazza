@@ -19,6 +19,7 @@
 ### Out (Future)
 
 - Hub-Server architecture (Redis, RabbitMQ, etc.)
+- Client SDK (PiazzaClient) with identity, cursor, channel naming
 - Typed channel enforcement (history/notebook/memory/broadcast/group/DM)
 - Moderator mechanism
 - Message TTL / retention signals
@@ -34,9 +35,9 @@
 ### Types
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class Message:
-    id: str              # UUID
+    id: str              # UUID v7 (time-ordered)
     channel: str         # channel name (free-form string)
     sender: str          # agent ID
     msg_type: str        # "text" | "context_sync" | "notification" | "artifact" | ...
@@ -92,9 +93,9 @@ The bus is composed of pluggable components via Protocol interfaces:
 
 ```
 Bus (orchestrator)
-├── StorageBackend   → where messages are persisted
-│   ├── SQLiteStorage  (default, cross-process via WAL)
-│   └── MemoryStorage  (testing)
+├── Backend          → where messages are stored and delivered
+│   ├── SQLiteBackend  (default, cross-process via WAL)
+│   └── MemoryBackend  (testing)
 ├── Serializer       → how metadata is encoded
 │   └── JSONSerializer (default, human-readable)
 └── In-process pub/sub (built-in observer pattern)
@@ -104,21 +105,21 @@ Bus (orchestrator)
 
 | Component | Protocol | MVP Default | Future Options |
 |-----------|----------|-------------|----------------|
-| Storage | `StorageBackend` | `SQLiteStorage` | Redis, S3, PostgreSQL |
+| Backend | `Backend` | `SQLiteBackend` | Redis, RabbitMQ, S3, PostgreSQL |
 | Serializer | `Serializer` | `JSONSerializer` | MessagePack, Protobuf |
 | Bus | `MessageBus` | `Bus` | Custom implementations |
 
 ### Usage
 
 ```python
-from piazza import Bus, SQLiteStorage, MemoryStorage, JSONSerializer
+from piazza import Bus, SQLiteBackend, MemoryBackend, JSONSerializer
 
 # Default: SQLite + JSON (same as SQLiteBus())
 bus = Bus()
 
 # Explicit configuration
 bus = Bus(
-    storage=SQLiteStorage("workspace/.piazza.db"),
+    backend=SQLiteBackend("workspace/.piazza.db"),
     serializer=JSONSerializer(),
 )
 
@@ -126,21 +127,21 @@ bus = Bus(
 bus = SQLiteBus("workspace/.piazza.db")
 
 # Testing: pure in-memory
-bus = Bus(storage=MemoryStorage())
+bus = Bus(backend=MemoryBackend())
 ```
 
 ### Adding a New Backend
 
-Implement the `StorageBackend` protocol:
+Implement the `Backend` protocol:
 
 ```python
-class RedisStorage:
+class RedisBackend:
     def store(self, message: Message) -> None: ...
     def query(self, channel: str, after: str | None = None, limit: int = 100) -> list[Message]: ...
     def list_channels(self) -> list[str]: ...
     def close(self) -> None: ...
 
-bus = Bus(storage=RedisStorage("redis://localhost:6379"))
+bus = Bus(backend=RedisBackend("redis://localhost:6379"))
 ```
 
 ---
