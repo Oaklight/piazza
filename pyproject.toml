@@ -35,7 +35,9 @@ where = ["src"]
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.11.0",
+    "ruff>=0.15.0",
+    "ty>=0.0.31",
+    "complexipy>=5.2.0",
     "build>=1.2.0",
     "twine>=6.1.0",
 ]
@@ -49,4 +51,18 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "C901"]
+ignore = ["UP007", "E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ty.environment]
+python-version = "3.10"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.complexipy]
+paths = ["src"]
+max-complexity-allowed = 15
