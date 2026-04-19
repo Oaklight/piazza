@@ -1,4 +1,5 @@
 dist/
+build/
 *.egg-info/
 __pycache__/
 *.pyc
@@ -8,5 +9,20 @@ __pycache__/
 site/
 _build/
 .pytest_cache/
+
+# Worktree-managed documentation directories
 docs_en/
 docs_zh/
+
+# Generated assets (screenshots, etc.)
+docs_assets/
+
+# Tool / IDE artifacts
+.claude/
+.playwright-mcp/
+
+# Loose screenshots from admin panel testing
+admin-dashboard*.png
+admin-messages*.png
+admin-channels*.png
+admin-subscriptions*.png
