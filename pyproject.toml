@@ -63,6 +63,12 @@ python-version = "3.10"
 [tool.ty.src]
 include = ["src", "tests"]
 
+[tool.ty.rules]
+# uuid.uuid7 is Python 3.14+; we handle AttributeError at runtime
+unresolved-attribute = "warn"
+# Tests intentionally assign to frozen dataclass to verify it raises
+invalid-assignment = "warn"
+
 [tool.complexipy]
 paths = ["src"]
 max-complexity-allowed = 15

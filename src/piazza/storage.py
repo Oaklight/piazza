@@ -98,9 +98,7 @@ class SQLiteStorage:
         Returns:
             Sorted list of channel names.
         """
-        cursor = self._conn.execute(
-            "SELECT DISTINCT channel FROM messages ORDER BY channel"
-        )
+        cursor = self._conn.execute("SELECT DISTINCT channel FROM messages ORDER BY channel")
         return [row["channel"] for row in cursor.fetchall()]
 
     def close(self) -> None:
