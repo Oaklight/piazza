@@ -2,17 +2,26 @@
 
 __version__ = "0.0.1a999"
 
+from piazza.backends import MemoryBackend, SQLiteBackend
 from piazza.bus import Bus, SQLiteBus
+from piazza.protocols import Backend, MessageBus, Serializer
 from piazza.serializers import JSONSerializer
-from piazza.storage import MemoryStorage, SQLiteStorage
-from piazza.types import Message, MessageBus, Serializer, StorageBackend
+from piazza.types import Message
+
+# Backward compatibility aliases (deprecated, will be removed)
+SQLiteStorage = SQLiteBackend
+MemoryStorage = MemoryBackend
+StorageBackend = Backend
 
 __all__ = [
+    "Backend",
     "Bus",
     "JSONSerializer",
+    "MemoryBackend",
     "MemoryStorage",
     "Message",
     "MessageBus",
+    "SQLiteBackend",
     "SQLiteBus",
     "SQLiteStorage",
     "Serializer",

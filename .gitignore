@@ -8,3 +8,5 @@ __pycache__/
 site/
 _build/
 .pytest_cache/
+docs_en/
+docs_zh/
