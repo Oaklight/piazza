@@ -1,181 +1,258 @@
-# piazza MVP Spec
+# piazza MVP — Implementation Reference
 
-**Date:** 2026-04-14
-**Goal:** Minimal message bus that ctxweave needs for multi-agent context sync.
+**Date:** 2026-04-20
+**Status:** ✅ Implemented
 
 ---
 
-## Scope
+## Overview
 
-### In (MVP)
+piazza MVP provides a minimal, zero-dependency message bus for multi-agent context synchronization. All core layers (Backend → Bus → Client SDK) are implemented and tested.
 
-- **SQLite backend** — zero external deps, single file, survives restarts
-- **In-process library** — `bus = SQLiteBus("piazza.db")`, no server
-- **Generic Message** — one type with a `msg_type` field for differentiation
-- **Core operations**: publish, poll, subscribe (in-process callback), list channels
-- **Sync API** — no async
-- **Cross-process support** via shared SQLite file + polling
+### What's Included
 
-### Out (Future)
+| Layer | Component | Status |
+|-------|-----------|--------|
+| **Backend** | `SQLiteBackend` — WAL-mode, cross-process, single-file persistence | ✅ |
+| **Backend** | `MemoryBackend` — pure in-memory, for testing | ✅ |
+| **Bus** | `Bus` — orchestrator combining Backend + Serializer + in-process pub/sub | ✅ |
+| **Bus** | `SQLiteBus` — convenience shorthand for `Bus(backend=SQLiteBackend(...))` | ✅ |
+| **Serializer** | `JSONSerializer` — human-readable metadata encoding | ✅ |
+| **Client SDK** | `PiazzaClient` — identity, cursor, channel naming, semantic API | ✅ |
+| **Admin** | Admin panel — HTTP dashboard for bus inspection | ✅ |
 
-- Hub-Server architecture (Redis, RabbitMQ, etc.)
-- Client SDK (PiazzaClient) with identity, cursor, channel naming
-- Typed channel enforcement (history/notebook/memory/broadcast/group/DM)
+### What's Deferred
+
+- Hub-Server architecture (PiazzaServer + RemoteTransport)
+- Additional Backends (Redis, RabbitMQ, etc.)
+- Typed channel enforcement at Bus layer
 - Moderator mechanism
 - Message TTL / retention signals
 - Priority queue / delayed messages
 - Async API
-- MCP/OpenAPI server exposure
-- llm-rosetta IR integration
+- MCP/REST/CLI Delivery layer
+- Federation (cross-instance communication, see Issue #4)
+- Secret rotation / agent revocation
 
 ---
 
-## API Surface
+## Quick Start
 
-### Types
+```python
+from piazza import Bus, MemoryBackend, PiazzaClient
+
+# In-process: agents share a Bus
+bus = Bus(backend=MemoryBackend())
+alice = PiazzaClient(bus, "alice-agent")
+bob = PiazzaClient(bus, "bob-agent")
+
+# Send a DM
+alice.dm_send("bob-agent", "hello!")
+messages = bob.dm_read("alice-agent")
+
+# Notes and thoughts
+alice.note_write("design decision: use SQLite", tags=["architecture"])
+alice.thought_record("reasoning", "backend choice", "SQLite has zero deps...")
+
+# Memory
+alice.memory_store("user prefers dark mode", memory_type="preference")
+results = alice.memory_recall("dark mode")
+
+# Cleanup
+alice.close()
+bob.close()
+bus.close()
+```
+
+### Connection Targets
+
+```python
+# Bus object (in-process, caller manages lifecycle)
+client = PiazzaClient(bus, "agent-1")
+
+# :memory: (auto-creates Bus, client owns it)
+client = PiazzaClient(":memory:", "agent-1")
+
+# File path (SQLite persistence, client owns Bus)
+client = PiazzaClient("workspace/.piazza.db", "agent-1")
+
+# Future: redis://, amqp://, http:// → NotImplementedError
+```
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│          PiazzaClient (Client SDK)           │
+│  Identity · Cursor · Channel naming · API    │
+├──────────────────────────────────────────────┤
+│         Transport (LocalTransport)           │
+├──────────────────────────────────────────────┤
+│               Bus (Orchestrator)             │
+│    Backend + Serializer + in-process pub/sub │
+├──────────────────────────────────────────────┤
+│    SQLiteBackend  │  MemoryBackend           │
+│    (WAL mode)     │  (testing)               │
+└──────────────────────────────────────────────┘
+```
+
+---
+
+## API Reference
+
+### Message
 
 ```python
 @dataclass(frozen=True)
 class Message:
     id: str              # UUID v7 (time-ordered)
-    channel: str         # channel name (free-form string)
+    channel: str         # channel name
     sender: str          # agent ID
-    msg_type: str        # "text" | "context_sync" | "notification" | "artifact" | ...
+    msg_type: str        # "chat" | "note" | "thought" | "memory" | ...
     payload: str         # content (JSON string or plain text)
     timestamp: str       # ISO 8601
     metadata: dict | None  # optional extra fields
 ```
 
-### Protocol
+### Bus
 
 ```python
-class MessageBus(Protocol):
-    def publish(self, channel: str, sender: str, msg_type: str, payload: str,
-                metadata: dict | None = None) -> str:
-        """Publish a message. Returns message ID."""
-        ...
-
-    def poll(self, channel: str, after: str | None = None,
-             limit: int = 100) -> list[Message]:
-        """Get messages from channel. If `after` is a message ID, returns
-        messages after that point. Returns oldest-first."""
-        ...
-
-    def subscribe(self, channel: str,
-                  callback: Callable[[Message], None]) -> str:
-        """Register in-process callback for new messages. Returns subscription ID.
-        Callback is invoked synchronously during publish() in the same process."""
-        ...
-
-    def unsubscribe(self, subscription_id: str) -> None:
-        """Remove a subscription."""
-        ...
-
-    def channels(self) -> list[str]:
-        """List all channels that have at least one message."""
-        ...
+class Bus:
+    def __init__(self, backend=None, serializer=None, *, require_auth=False)
+    def publish(channel, sender, msg_type, payload, metadata=None) -> str
+    def poll(channel, after=None, limit=100) -> list[Message]
+    def subscribe(channel, callback) -> str
+    def unsubscribe(subscription_id) -> None
+    def channels() -> list[str]
+    def close() -> None
+    # Context manager: with Bus(...) as bus: ...
 ```
 
-### Implementation
+### PiazzaClient
+
+#### Constructor & Lifecycle
 
 ```python
-class SQLiteBus:
-    def __init__(self, db_path: str | Path = ":memory:"):
-        """Create bus. Use file path for persistence, \":memory:\" for testing."""
-        ...
+class PiazzaClient:
+    def __init__(target: Bus | str, agent_id: str, *,
+                 secret=None, display_name=None)
+
+    @classmethod
+    def register(target, agent_id, *, display_name=None)
+        -> tuple[PiazzaClient, str]
+
+    def close() -> None
+    # Context manager: with PiazzaClient(...) as client: ...
+```
+
+#### Core API — Channel Operations
+
+```python
+    # Send message to channel
+    def channel_send(channel, content, msg_type="chat",
+                     metadata=None) -> str
+
+    # Read messages (no cursor advancement)
+    def channel_read(channel, limit=10, after=None) -> list[Message]
+
+    # Poll for new messages (cursor auto-advances)
+    def channel_poll(channel) -> list[Message]
+
+    # List all channels
+    def channel_list() -> list[str]
+```
+
+#### Semantic API — Sugar Methods
+
+```python
+    # Notes (writes to notebook:{agent_id})
+    def note_write(content, tags=None) -> str
+    def note_read(tags=None, limit=10) -> list[Message]
+
+    # Thoughts (writes to notebook:{agent_id}, msg_type="thought")
+    def thought_record(thinking_mode, focus_area, thought_process) -> str
+    def thought_read(limit=10) -> list[Message]
+
+    # Memory (writes to memory:{agent_id})
+    def memory_store(content, memory_type="general") -> str
+    def memory_recall(query, limit=5) -> list[Message]
+
+    # DM (writes to dm:{sorted_pair})
+    def dm_send(to_agent, content) -> str
+    def dm_read(with_agent, limit=10) -> list[Message]
+
+    # Broadcast (reads from broadcast:{topic})
+    def broadcast_list() -> list[str]
+    def broadcast_read(topic, limit=10) -> list[Message]
+
+    # Notifications
+    def notification_check() -> list[Message]
 ```
 
 ---
 
-## Modular Architecture
+## Identity & Authentication
 
-The bus is composed of pluggable components via Protocol interfaces:
+### Agent ID
 
-```
-Bus (orchestrator)
-├── Backend          → where messages are stored and delivered
-│   ├── SQLiteBackend  (default, cross-process via WAL)
-│   └── MemoryBackend  (testing)
-├── Serializer       → how metadata is encoded
-│   └── JSONSerializer (default, human-readable)
-└── In-process pub/sub (built-in observer pattern)
-```
+Format: `^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$` (3-64 chars, lowercase alphanumeric + hyphens).
 
-### Plug Points
-
-| Component | Protocol | MVP Default | Future Options |
-|-----------|----------|-------------|----------------|
-| Backend | `Backend` | `SQLiteBackend` | Redis, RabbitMQ, S3, PostgreSQL |
-| Serializer | `Serializer` | `JSONSerializer` | MessagePack, Protobuf |
-| Bus | `MessageBus` | `Bus` | Custom implementations |
-
-### Usage
+### Authentication Modes
 
 ```python
-from piazza import Bus, SQLiteBackend, MemoryBackend, JSONSerializer
+# No auth (default) — development / testing
+bus = Bus(require_auth=False)
+client = PiazzaClient(bus, "agent-1")  # just works
 
-# Default: SQLite + JSON (same as SQLiteBus())
-bus = Bus()
-
-# Explicit configuration
-bus = Bus(
-    backend=SQLiteBackend("workspace/.piazza.db"),
-    serializer=JSONSerializer(),
-)
-
-# Convenience shorthand
-bus = SQLiteBus("workspace/.piazza.db")
-
-# Testing: pure in-memory
-bus = Bus(backend=MemoryBackend())
+# Auth required — production / shared environments
+bus = Bus(require_auth=True)
+client, secret = PiazzaClient.register(bus, "agent-1")
+# Store secret, reconnect later:
+client = PiazzaClient(bus, "agent-1", secret=secret)
 ```
 
-### Adding a New Backend
-
-Implement the `Backend` protocol:
-
-```python
-class RedisBackend:
-    def store(self, message: Message) -> None: ...
-    def query(self, channel: str, after: str | None = None, limit: int = 100) -> list[Message]: ...
-    def list_channels(self) -> list[str]: ...
-    def close(self) -> None: ...
-
-bus = Bus(backend=RedisBackend("redis://localhost:6379"))
-```
+- Secrets are `sk-{48 hex chars}`, stored as `sha256:{hash}` in `_system:registry`
+- Registration via `PiazzaClient.register()` returns `(client, secret)` tuple
+- Cross-session reconnect: same `agent_id` + `secret`
 
 ---
 
-## How ctxweave Uses It
+## Channel Naming Conventions
 
-```python
-from piazza import SQLiteBus
+Enforced by Client SDK (semantic API methods), not by Bus.
 
-# Each agent gets a bus instance pointing to the same DB file
-bus = SQLiteBus("workspace/.piazza.db")
-
-# ctxweave push: announce new commits
-bus.publish(
-    channel="sync",
-    sender="agent-a",
-    msg_type="context_sync",
-    payload='{"commit_ids": ["abc123", "def456"]}',
-)
-
-# ctxweave pull: check for new commits from others
-new_messages = bus.poll(channel="sync", after=last_seen_id)
-for msg in new_messages:
-    if msg.sender != my_id:
-        commits_to_pull = json.loads(msg.payload)["commit_ids"]
-        # ... pull those commits ...
-
-# In-process notification (optional, for same-process multi-agent)
-bus.subscribe("sync", lambda msg: print(f"New sync from {msg.sender}"))
-```
+| Type | Pattern | Used By |
+|------|---------|---------|
+| Notebook | `notebook:{agent_id}` | `note_write`, `thought_record` |
+| Memory | `memory:{agent_id}` | `memory_store`, `memory_recall` |
+| DM | `dm:{agent_a}:{agent_b}` (sorted) | `dm_send`, `dm_read` |
+| Broadcast | `broadcast:{topic}` | `broadcast_list`, `broadcast_read` |
+| System | `_system:registry` | Agent registration |
+| System | `_system:agents` | Presence announcement |
+| System | `_system:cursors:{agent_id}` | Cursor persistence |
+| System | `_system:notifications:{agent_id}` | `notification_check` |
 
 ---
 
-## Schema
+## Cursor Management
+
+Two read modes:
+
+| Method | Cursor | Use Case |
+|--------|--------|----------|
+| `channel_poll(ch)` | ✅ Auto-advances | Track new messages incrementally |
+| `channel_read(ch)` | ❌ No effect | Random access, view history |
+
+Cursors persist across sessions via `_system:cursors:{agent_id}`:
+- `close()` saves cursor snapshot
+- New `PiazzaClient` with same `agent_id` restores from latest snapshot
+- `channel_poll()` resumes from where the previous session left off
+
+---
+
+## Schema (SQLite)
 
 ```sql
 CREATE TABLE IF NOT EXISTS messages (
@@ -194,14 +271,46 @@ CREATE INDEX IF NOT EXISTS idx_channel_ts ON messages (channel, timestamp);
 
 ---
 
+## Cross-Process Usage
+
+Multiple processes share the same SQLite file via WAL mode:
+
+```python
+# Process A
+client_a = PiazzaClient("shared/.piazza.db", "coder-1")
+client_a.channel_send("sync", '{"commits": ["abc"]}', msg_type="context_sync")
+
+# Process B
+client_b = PiazzaClient("shared/.piazza.db", "reviewer-1")
+new_msgs = client_b.channel_poll("sync")
+```
+
+- `subscribe()` callbacks only fire within the same process
+- Cross-process uses `channel_poll()` for message discovery
+
+---
+
 ## Design Decisions
 
-1. **Why SQLite, not Redis?** Zero deps. ctxweave already targets zero-dep philosophy. MVP piazza should match. SQLite supports cross-process access via WAL mode.
+1. **SQLite backend** — Zero external deps. WAL mode enables concurrent cross-process access.
+2. **Message ID as cursor** — `poll(after=id)` uses UUID v7 (time-ordered), avoids clock skew.
+3. **Sync API only** — Async doubles the surface for no MVP benefit.
+4. **Poll + Subscribe** — Poll works cross-process; subscribe works in-process. Both simple.
+5. **Channel naming at SDK layer** — Bus stays generic; PiazzaClient enforces conventions.
+6. **Everything is messages** — Registry, cursors, and presence all stored as messages in `_system:` channels.
+7. **`register()` uses `object.__new__()`** — Bypasses `__init__` auth to write registration before authentication can run.
+8. **Transport abstraction** — Decouples PiazzaClient from in-process vs. network Bus access.
 
-2. **Why no typed channels?** Channel semantics are the caller's responsibility. piazza just transports messages. This keeps the bus minimal and avoids piazza needing to know about ctxweave internals.
+---
 
-3. **Why sync, not async?** ctxweave's operations are synchronous. Adding async doubles the API surface for no MVP benefit.
+## Test Coverage
 
-4. **Why poll + subscribe?** Poll works cross-process (shared DB). Subscribe works in-process (observer pattern). Both are useful, neither is complex.
+185 tests across 3 test files:
 
-5. **Message ID as cursor** — `poll(after=id)` uses message ID (UUID v7, time-ordered) as cursor instead of timestamp. Avoids clock skew issues and is monotonically increasing.
+| File | Tests | Coverage |
+|------|-------|----------|
+| `test_bus.py` | Message, Serializer, Backends, Bus, SQLiteBus | 98 |
+| `test_client.py` | Transport, Identity, Constructor, Lifecycle, Core API, Sugar API, Cursor, Auth | 67 |
+| `test_admin.py` | Backend extensions, Auth, Admin Server, Admin API | 20 |
+
+All functions pass complexipy (max complexity ≤ 15).
