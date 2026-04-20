@@ -4,6 +4,7 @@ __version__ = "0.0.1a999"
 
 from piazza.backends import MemoryBackend, SQLiteBackend
 from piazza.bus import Bus, SQLiteBus
+from piazza.client import PiazzaClient
 from piazza.protocols import Backend, MessageBus, Serializer
 from piazza.serializers import JSONSerializer
 from piazza.types import Message
@@ -21,6 +22,7 @@ __all__ = [
     "MemoryStorage",
     "Message",
     "MessageBus",
+    "PiazzaClient",
     "SQLiteBackend",
     "SQLiteBus",
     "SQLiteStorage",

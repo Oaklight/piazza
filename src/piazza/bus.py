@@ -66,6 +66,8 @@ class Bus:
             Defaults to in-memory SQLite.
         serializer: Serializer for metadata encoding.
             Defaults to JSON.
+        require_auth: If True, PiazzaClient must authenticate with
+            a registered secret. Defaults to False.
 
     Example:
         >>> bus = Bus()  # in-memory SQLite + JSON
@@ -77,9 +79,12 @@ class Bus:
         self,
         backend: Backend | None = None,
         serializer: Serializer | None = None,
+        *,
+        require_auth: bool = False,
     ) -> None:
         self._backend = backend or SQLiteBackend()
         self._serializer = serializer or JSONSerializer()
+        self._require_auth = require_auth
         self._subs: dict[str, dict[str, Callable[[Message], None]]] = defaultdict(dict)
 
     @property
@@ -91,6 +96,11 @@ class Bus:
     def serializer(self) -> Serializer:
         """The serializer used for metadata."""
         return self._serializer
+
+    @property
+    def require_auth(self) -> bool:
+        """Whether this bus requires client authentication."""
+        return self._require_auth
 
     def publish(
         self,
