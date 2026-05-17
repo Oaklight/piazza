@@ -246,7 +246,7 @@ class TestPiazzaClientConstructor:
 
     def test_invalid_target_type_raises(self):
         with pytest.raises(TypeError, match="target must be Bus or str"):
-            PiazzaClient(42, "test-agent")  # type: ignore[arg-type]
+            PiazzaClient(42, "test-agent")  # type: ignore
 
     def test_display_name_defaults_to_agent_id(self):
         bus = _make_bus()
@@ -545,6 +545,7 @@ class TestNotes:
         client.note_write("tagged note", tags=["python", "api"])
         notes = client.note_read()
         assert len(notes) == 1
+        assert notes[0].metadata is not None
         assert notes[0].metadata["tags"] == ["python", "api"]
         client.close()
         bus.close()
@@ -599,6 +600,7 @@ class TestThoughts:
         client = _make_client(bus)
         client.thought_record("planning", "architecture", "step 1: ...")
         thoughts = client.thought_read()
+        assert thoughts[0].metadata is not None
         assert thoughts[0].metadata["thinking_mode"] == "planning"
         assert thoughts[0].metadata["focus_area"] == "architecture"
         client.close()
@@ -639,6 +641,7 @@ class TestMemory:
         client = _make_client(bus)
         client.memory_store("use pytest", memory_type="preference")
         msgs = client.channel_read(f"memory:{client.agent_id}")
+        assert msgs[0].metadata is not None
         assert msgs[0].metadata["memory_type"] == "preference"
         client.close()
         bus.close()
@@ -969,6 +972,7 @@ class TestSoftRegistration:
         client = PiazzaClient(bus, "test-agent", display_name="Test Bot")
         msgs = bus.poll("_system:agents")
         presence_msgs = [m for m in msgs if m.sender == "test-agent"]
+        assert presence_msgs[0].metadata is not None
         assert presence_msgs[0].metadata["display_name"] == "Test Bot"
         client.close()
         bus.close()
