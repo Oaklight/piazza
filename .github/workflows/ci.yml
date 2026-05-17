@@ -7,9 +7,8 @@ on:
     branches: [master]
 
 jobs:
-  lint-and-test:
+  lint:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
 
@@ -23,17 +22,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,test]"
 
-      - name: Lint with ruff
-        run: ruff check
+      - name: Run pre-commit checks
+        uses: pre-commit/action@v3.0.1
 
-      - name: Check formatting with ruff
-        run: ruff format --check
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-      - name: Type check with ty
-        run: ty check
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
-      - name: Complexity check with complexipy
-        run: complexipy src/
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,test]"
 
       - name: Run tests
         run: python -m pytest tests/ -v
