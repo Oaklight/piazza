@@ -41,6 +41,7 @@ dev = [
     "ruff>=0.15.0",
     "ty>=0.0.31",
     "complexipy>=5.2.0",
+    "pre-commit>=4.0.0",
     "build>=1.2.0",
     "twine>=6.1.0",
 ]
