@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/Oaklight/piazza/actions/workflows/ci.yml/badge.svg)](https://github.com/Oaklight/piazza/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Oaklight/piazza)
 
 English Version | [中文版](README_zh.md)
 
