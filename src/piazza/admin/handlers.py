@@ -8,7 +8,7 @@ import json
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 from .static import ADMIN_HTML
 
@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from piazza.bus import Bus
 
     from .auth import TokenAuth
+
+
+class _ThroughputBucket(TypedDict):
+    """Single bucket in the per-second throughput histogram."""
+
+    timestamp: str
+    count: int
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
@@ -163,7 +170,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         timestamps = self.bus.backend.query_recent_timestamps(60)
 
         now = datetime.now(timezone.utc)
-        buckets = []
+        buckets: list[_ThroughputBucket] = []
         for i in range(60):
             bucket_time = now - timedelta(seconds=59 - i)
             bucket_iso = bucket_time.replace(microsecond=0).isoformat()
