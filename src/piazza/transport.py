@@ -6,6 +6,7 @@ whether the Bus is in-process or behind a network API.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -38,6 +39,30 @@ class Transport(Protocol):
 
     def list_channels(self) -> list[str]:
         """List all channels with messages."""
+        ...
+
+    def subscribe(
+        self,
+        channel: str,
+        callback: Callable[[Message], None],
+    ) -> str:
+        """Subscribe to real-time notifications on a channel.
+
+        Args:
+            channel: Channel to subscribe to.
+            callback: Called with each new Message.
+
+        Returns:
+            Subscription ID for unsubscribe().
+        """
+        ...
+
+    def unsubscribe(self, sub_id: str) -> None:
+        """Remove a subscription.
+
+        Args:
+            sub_id: ID returned by subscribe().
+        """
         ...
 
     @property
@@ -88,6 +113,18 @@ class LocalTransport:
     def require_auth(self) -> bool:
         """Delegate to bus.require_auth."""
         return self._bus.require_auth
+
+    def subscribe(
+        self,
+        channel: str,
+        callback: Callable[[Message], None],
+    ) -> str:
+        """Subscribe via the local bus."""
+        return self._bus.subscribe(channel, callback)
+
+    def unsubscribe(self, sub_id: str) -> None:
+        """Unsubscribe via the local bus."""
+        self._bus.unsubscribe(sub_id)
 
     def close(self) -> None:
         """No-op -- caller manages bus lifecycle."""
