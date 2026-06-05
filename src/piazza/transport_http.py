@@ -6,14 +6,13 @@ a background thread + http.client for SSE streaming.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
-import queue
 import threading
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from typing import Any
 
 from piazza.types import Message
 
@@ -170,9 +169,7 @@ class HttpTransport:
             self._sse_thread.join(timeout=3)
 
         self._sse_stop = threading.Event()
-        self._sse_thread = threading.Thread(
-            target=self._sse_loop, daemon=True, name="piazza-sse"
-        )
+        self._sse_thread = threading.Thread(target=self._sse_loop, daemon=True, name="piazza-sse")
         self._sse_thread.start()
 
     def _sse_loop(self) -> None:
@@ -183,47 +180,53 @@ class HttpTransport:
 
         while not self._sse_stop.is_set():
             try:
-                with self._sse_lock:
-                    channels = list(self._sse_channels)
-                if not channels:
-                    self._sse_stop.wait(1)
-                    continue
-
-                params = urllib.parse.urlencode(
-                    [("channel", ch) for ch in channels]
-                    + [("agent_id", self._agent_id)]
-                )
-                path = f"/v1/subscribe?{params}"
-
-                conn = http.client.HTTPConnection(host, port, timeout=30)
-                conn.request("GET", path)
-                resp = conn.getresponse()
-
-                if resp.status != 200:
-                    conn.close()
-                    self._sse_stop.wait(2)
-                    continue
-
-                # Read SSE stream line by line
-                buf = ""
-                while not self._sse_stop.is_set():
-                    line = resp.readline()
-                    if not line:
-                        break  # connection closed
-                    decoded = line.decode("utf-8", errors="replace")
-                    if decoded.strip() == "":
-                        # Empty line = event boundary
-                        if buf.strip():
-                            self._dispatch_sse_event(buf)
-                        buf = ""
-                    else:
-                        buf += decoded
-
-                conn.close()
-
+                self._sse_connect_once(host, port)
             except (OSError, http.client.HTTPException):
                 if not self._sse_stop.is_set():
                     self._sse_stop.wait(2)  # reconnect delay
+
+    def _sse_connect_once(self, host: str, port: int) -> None:
+        """Open one SSE connection and drain events until it closes."""
+        with self._sse_lock:
+            channels = list(self._sse_channels)
+        if not channels:
+            self._sse_stop.wait(1)
+            return
+
+        path = self._build_sse_path(channels)
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            if resp.status != 200:
+                self._sse_stop.wait(2)
+                return
+            self._drain_sse_stream(resp)
+        finally:
+            conn.close()
+
+    def _build_sse_path(self, channels: list[str]) -> str:
+        """Build the SSE subscribe URL path for the given channels."""
+        params = urllib.parse.urlencode(
+            [("channel", ch) for ch in channels] + [("agent_id", self._agent_id)]
+        )
+        return f"/v1/subscribe?{params}"
+
+    def _drain_sse_stream(self, resp) -> None:
+        """Read the SSE stream line by line, dispatching event boundaries."""
+        buf = ""
+        while not self._sse_stop.is_set():
+            line = resp.readline()
+            if not line:
+                return  # connection closed
+            decoded = line.decode("utf-8", errors="replace")
+            if decoded.strip() == "":
+                # Empty line = event boundary
+                if buf.strip():
+                    self._dispatch_sse_event(buf)
+                buf = ""
+            else:
+                buf += decoded
 
     def _dispatch_sse_event(self, raw: str) -> None:
         """Parse and dispatch a single SSE event."""
@@ -253,10 +256,9 @@ class HttpTransport:
             cbs = list((self._sse_callbacks.get(channel) or {}).values())
 
         for cb in cbs:
-            try:
+            # Don't let subscriber errors kill the SSE loop
+            with contextlib.suppress(Exception):
                 cb(msg)
-            except Exception:
-                pass  # don't let subscriber errors kill the SSE loop
 
     # ── HTTP Helpers ──────────────────────────────────────────────
 
@@ -272,7 +274,9 @@ class HttpTransport:
         url = f"{self._base_url}{path}"
         data = json.dumps(body, ensure_ascii=False).encode()
         req = urllib.request.Request(
-            url, data=data, method="POST",
+            url,
+            data=data,
+            method="POST",
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:

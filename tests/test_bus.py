@@ -43,6 +43,7 @@ def _concurrent_open_worker(db_path: str, idx: int, start_evt, q) -> None:
     except Exception as e:  # noqa: BLE001
         q.put((idx, f"{type(e).__name__}: {e}"))
 
+
 # ──────────────────────────────────────────────
 # Message dataclass
 # ──────────────────────────────────────────────
