@@ -14,6 +14,35 @@ from piazza import (
     SQLiteBus,
 )
 
+
+def _concurrent_open_worker(db_path: str, idx: int, start_evt, q) -> None:
+    """Module-level worker for test_concurrent_cold_start.
+
+    Waits on start_evt so all workers race the WAL switch at the same
+    instant. Must be top-level so it can be pickled by spawn.
+    """
+    start_evt.wait(timeout=10)
+    try:
+        try:
+            b = SQLiteBackend(db_path)
+        except Exception as e:  # noqa: BLE001
+            q.put((idx, f"init: {type(e).__name__}: {e}"))
+            return
+        b.store(
+            Message(
+                id=f"id-{idx:04d}",
+                channel="ch",
+                sender=f"writer-{idx}",
+                msg_type="text",
+                payload=str(idx),
+                timestamp="2026-01-01T00:00:00+00:00",
+            )
+        )
+        b.close()
+        q.put((idx, None))
+    except Exception as e:  # noqa: BLE001
+        q.put((idx, f"{type(e).__name__}: {e}"))
+
 # ──────────────────────────────────────────────
 # Message dataclass
 # ──────────────────────────────────────────────
@@ -222,6 +251,52 @@ class TestSQLiteBackend:
         backend = SQLiteBackend()
         assert repr(backend) == "SQLiteBackend(':memory:')"
         backend.close()
+
+    def test_concurrent_cold_start(self, tmp_path):
+        """Multiple processes opening the same DB concurrently must not
+        fail with 'database is locked'.
+
+        Regression test: switching to WAL journal_mode requires an
+        exclusive lock. Without an explicit busy_timeout, the default
+        0ms causes concurrent cold-starts to fail immediately. The
+        backend must set busy_timeout before any other PRAGMA so the
+        WAL switch waits for the lock instead of crashing.
+        """
+        import multiprocessing as mp
+
+        db = tmp_path / "concurrent.db"
+
+        ctx = mp.get_context("spawn")
+        q = ctx.Queue()
+        start_evt = ctx.Event()
+        n_workers = 8
+        procs = [
+            ctx.Process(
+                target=_concurrent_open_worker,
+                args=(str(db), i, start_evt, q),
+            )
+            for i in range(n_workers)
+        ]
+        for p in procs:
+            p.start()
+        # Give workers time to spawn + import + reach wait()
+        import time as _time
+
+        _time.sleep(0.5)
+        start_evt.set()
+        for p in procs:
+            p.join(timeout=15)
+            assert not p.is_alive(), "worker hung"
+
+        results = [q.get(timeout=1) for _ in procs]
+        errors = [(i, e) for i, e in results if e]
+        assert not errors, f"concurrent cold-start failed: {errors}"
+
+        # All writes landed
+        verify = SQLiteBackend(db)
+        msgs = verify.query("ch", limit=100)
+        verify.close()
+        assert len(msgs) == n_workers
 
 
 # ──────────────────────────────────────────────
