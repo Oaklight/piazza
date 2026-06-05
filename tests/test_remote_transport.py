@@ -229,7 +229,12 @@ class TestSsePush:
 
         transport = HttpTransport(server_url, agent_id="multi-sub")
         transport.subscribe("chan-a", lambda m: received_a.append(m))
-        transport.subscribe("chan-b", lambda m: (received_b.append(m), done.set()))
+
+        def _on_b(m):
+            received_b.append(m)
+            done.set()
+
+        transport.subscribe("chan-b", _on_b)
         time.sleep(0.5)
 
         sender = HttpTransport(server_url, agent_id="multi-pub")

@@ -17,6 +17,7 @@ API Endpoints:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import threading
@@ -117,10 +118,12 @@ class _HttpHandler(BaseHTTPRequestHandler):
         limit = int(self._qs_first(qs, "limit") or "100")
 
         msgs = self.bus.poll(channel, after=after, limit=limit)
-        self._json({
-            "messages": [self._msg_to_dict(m) for m in msgs],
-            "count": len(msgs),
-        })
+        self._json(
+            {
+                "messages": [self._msg_to_dict(m) for m in msgs],
+                "count": len(msgs),
+            }
+        )
 
     def _handle_channels(self) -> None:
         self._json({"channels": self.bus.channels()})
@@ -171,13 +174,15 @@ class _HttpHandler(BaseHTTPRequestHandler):
         # Subscribe to each channel on the bus
         def _make_callback(ch: str):
             def _cb(msg):
-                try:
-                    client.q.put_nowait({
-                        "channel": ch,
-                        "message": self._msg_to_dict(msg),
-                    })
-                except queue.Full:
-                    pass  # drop if subscriber is too slow
+                # Drop if subscriber is too slow (v0.1: no backpressure)
+                with contextlib.suppress(queue.Full):
+                    client.q.put_nowait(
+                        {
+                            "channel": ch,
+                            "message": self._msg_to_dict(msg),
+                        }
+                    )
+
             return _cb
 
         for ch in channels:
@@ -219,11 +224,8 @@ class _HttpHandler(BaseHTTPRequestHandler):
             # Cleanup subscriptions
             for sub_id in client.sub_ids:
                 self.bus.unsubscribe(sub_id)
-            with self.sse_lock:
-                try:
-                    self.sse_clients.remove(client)
-                except ValueError:
-                    pass
+            with self.sse_lock, contextlib.suppress(ValueError):
+                self.sse_clients.remove(client)
 
     # ── Helpers ───────────────────────────────────────────────────
 
@@ -346,7 +348,12 @@ class HttpFrontend:
         Returns actual bound address (useful when port=0 for OS-assigned).
         """
         if self._server is not None:
-            return self._server.server_address
+            addr = self._server.server_address
+            # server_address can be (str|bytes, int) or longer tuple
+            # for AF_INET6; for HttpFrontend we use AF_INET so it's
+            # always (host_str, port). Cast for the type checker.
+            host = addr[0] if isinstance(addr[0], str) else addr[0].decode()
+            return (host, int(addr[1]))
         return (self._host, self._port)
 
     def __repr__(self) -> str:
