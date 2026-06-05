@@ -111,7 +111,7 @@ class HttpTransport:
         if self._sse_thread and self._sse_thread.is_alive():
             self._sse_thread.join(timeout=3)
 
-    # ── SSE Subscription (bonus, not in Transport protocol) ───────
+    # ── SSE Subscription ─────────────────────────────────────────
 
     def subscribe(
         self,
