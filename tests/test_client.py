@@ -1,6 +1,7 @@
 """Tests for PiazzaClient SDK."""
 
 import json
+import urllib.error
 
 import pytest
 
@@ -228,13 +229,15 @@ class TestPiazzaClientConstructor:
         # DB file should exist
         assert (tmp_path / "test.db").exists()
 
-    def test_http_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="http"):
-            PiazzaClient("http://localhost:8741", "test-agent")
+    def test_http_uses_http_transport(self):
+        """http:// URLs should resolve to HttpTransport (ConnectionError if no server)."""
+        with pytest.raises((urllib.error.URLError, ConnectionRefusedError, OSError)):
+            PiazzaClient("http://localhost:19999", "test-agent")
 
-    def test_https_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="http"):
-            PiazzaClient("https://piazza.example.com", "test-agent")
+    def test_https_uses_http_transport(self):
+        """https:// URLs should resolve to HttpTransport (error if no server)."""
+        with pytest.raises((urllib.error.URLError, OSError)):
+            PiazzaClient("https://piazza.example.invalid", "test-agent")
 
     def test_redis_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="redis"):
