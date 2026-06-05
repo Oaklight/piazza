@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from piazza._vendor.retry import retry
 from piazza.types import Message
 
 _SCHEMA = """\
@@ -52,26 +52,24 @@ class SQLiteBackend:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
-    def _enable_wal_with_retry(
-        self,
-        attempts: int = 50,
-        base_delay: float = 0.05,
-    ) -> None:
-        """Enable WAL journal mode, retrying on transient lock errors.
+    @staticmethod
+    def _is_lock_error(exc: BaseException) -> bool:
+        return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
-        Args:
-            attempts: Maximum number of attempts before giving up.
-            base_delay: Base seconds to wait between attempts; actual
-                wait is base_delay * attempt_number (linear backoff).
-        """
-        for i in range(1, attempts + 1):
-            try:
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                return
-            except sqlite3.OperationalError as e:
-                if "locked" not in str(e).lower() or i == attempts:
-                    raise
-                time.sleep(base_delay * i)
+    def _enable_wal_with_retry(self) -> None:
+        """Enable WAL journal mode, retrying on transient lock errors."""
+
+        @retry(
+            max_retries=20,
+            base_delay=0.05,
+            backoff="linear",
+            jitter="none",
+            retry_on=self._is_lock_error,
+        )
+        def _set_wal() -> None:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+
+        _set_wal()
 
     def store(self, message: Message) -> None:
         """Persist a message to SQLite.

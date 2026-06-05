@@ -1,11 +1,11 @@
 """Tests for PiazzaClient SDK."""
 
 import json
-import urllib.error
 
 import pytest
 
 from piazza import Bus, MemoryBackend, PiazzaClient
+from piazza._vendor.httpclient import HttpClientError
 from piazza.transport import LocalTransport
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -231,12 +231,12 @@ class TestPiazzaClientConstructor:
 
     def test_http_uses_http_transport(self):
         """http:// URLs should resolve to HttpTransport (ConnectionError if no server)."""
-        with pytest.raises((urllib.error.URLError, ConnectionRefusedError, OSError)):
+        with pytest.raises((HttpClientError, ConnectionError, OSError)):
             PiazzaClient("http://localhost:19999", "test-agent")
 
     def test_https_uses_http_transport(self):
         """https:// URLs should resolve to HttpTransport (error if no server)."""
-        with pytest.raises((urllib.error.URLError, OSError)):
+        with pytest.raises((HttpClientError, ConnectionError, OSError)):
             PiazzaClient("https://piazza.example.invalid", "test-agent")
 
     def test_redis_raises_not_implemented(self):
