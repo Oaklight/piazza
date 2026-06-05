@@ -26,3 +26,4 @@ admin-dashboard*.png
 admin-messages*.png
 admin-channels*.png
 admin-subscriptions*.png
+.coverage
