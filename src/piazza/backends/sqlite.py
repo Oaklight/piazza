@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from piazza._vendor.retry import retry_call
 from piazza.types import Message
+
+
+def _is_sqlite_locked(exc: BaseException) -> bool:
+    """Predicate: retry only on SQLite 'database is locked' errors."""
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS messages (
@@ -59,19 +65,28 @@ class SQLiteBackend:
     ) -> None:
         """Enable WAL journal mode, retrying on transient lock errors.
 
+        SQLite's built-in busy handler (set via PRAGMA busy_timeout)
+        does NOT cover ``PRAGMA journal_mode`` mutations -- the lock
+        contention surfaces as an immediate OperationalError. Use
+        zerodep retry_call with linear backoff and a tight predicate
+        so multiple processes can cold-start the same DB without
+        racing each other.
+
         Args:
-            attempts: Maximum number of attempts before giving up.
-            base_delay: Base seconds to wait between attempts; actual
-                wait is base_delay * attempt_number (linear backoff).
+            attempts: Maximum number of attempts before giving up
+                (includes the initial call).
+            base_delay: Base seconds for linear backoff; actual wait
+                between attempt N and N+1 is ``base_delay * N``.
         """
-        for i in range(1, attempts + 1):
-            try:
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                return
-            except sqlite3.OperationalError as e:
-                if "locked" not in str(e).lower() or i == attempts:
-                    raise
-                time.sleep(base_delay * i)
+        retry_call(
+            lambda: self._conn.execute("PRAGMA journal_mode=WAL"),
+            max_retries=attempts - 1,  # retry_call counts retries, not attempts
+            base_delay=base_delay,
+            backoff="linear",
+            backoff_factor=1.0,
+            jitter="none",
+            retry_on=_is_sqlite_locked,
+        )
 
     def store(self, message: Message) -> None:
         """Persist a message to SQLite.

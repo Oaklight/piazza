@@ -22,5 +22,5 @@ repos:
     hooks:
       - id: complexipy
         files: ^src/
-        exclude: ^src/_vendor/
+        exclude: ^src/piazza/_vendor/
         args: [-mx, "15"]
