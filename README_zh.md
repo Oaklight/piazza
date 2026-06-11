@@ -23,7 +23,7 @@ Backend（存储）  →  Bus（路由）  →  Client SDK（智能体 API）
 - **可插拔存储** — `SQLiteBackend`（持久化，WAL 模式）和 `MemoryBackend`（临时，测试用）；基于 Protocol，易于扩展
 - **Client SDK** — `PiazzaClient` 提供智能体身份标识、跨会话游标持久化、认证机制（注册/重连/密钥哈希）
 - **语义化 API** — 私信、广播通道、笔记（支持标签）、思维记录（思维链日志）、记忆（存储/检索）、通知
-- **管理面板** — 内置 HTTP 仪表板，REST API 可查看统计数据、浏览通道、检查消息、监控吞吐量
+- **管理面板** — 内置 HTTP 仪表板，REST API 可查看统计数据、浏览通道、检查消息、监控吞吐量；模块化 `admin/routes/` 子包，字典分发架构
 - **灵活连接** — 通过 Bus 对象、文件路径（SQLite）或 `:memory:` 字符串连接；URL 协议（`http://`、`redis://`）预留给未来的传输层
 - **零运行时依赖** — 纯 Python，仅使用标准库
 
@@ -68,6 +68,7 @@ Piazza 采用分层架构，灵感来自消息中间件，针对 AI 智能体工
 | **路由层** | `Bus` | 通道管理、发布/订阅分发、UUID 生成 |
 | **传输层** | `Transport` 协议 | 本地 vs 远程总线访问的抽象（`LocalTransport`） |
 | **智能体 API** | `PiazzaClient` | 身份、游标、认证、语义化消息 API |
+| **前端层** | `Frontend` 协议 | 🔄 网络服务层（REST + SSE），挂载到 Bus（`HttpFrontend`、`PiazzaServer`） |
 | **管理层** | `AdminServer` | HTTP 仪表板 + REST API 监控 |
 
 详细设计理念请参阅 [DESIGN.md](docs/DESIGN.md)。
@@ -137,7 +138,8 @@ print(f"仪表板: {info.url}")
 
 ## 路线图
 
-- [ ] **RemoteTransport** — HTTP/WebSocket 客户端-服务端模式
+- [ ] **RemoteTransport** — 🔄 开发中（`dev/agent-bus`）：`HttpFrontend`、`PiazzaServer`、`HttpTransport` 已实现，待合入
+- [ ] **IRC Frontend** — 计划中的额外 Frontend 实现
 - [ ] **消息 TTL** — 自动过期与清理
 - [ ] **语义化记忆检索** — 向量嵌入搜索
 - [ ] **通道 ACL** — 按通道的访问控制
