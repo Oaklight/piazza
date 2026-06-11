@@ -23,7 +23,7 @@ Backend (storage)  →  Bus (routing)  →  Client SDK (agent API)
 - **Pluggable storage** — `SQLiteBackend` (persistent, WAL mode) and `MemoryBackend` (ephemeral, testing); protocol-based, easy to extend
 - **Client SDK** — `PiazzaClient` with agent identity, cursor persistence across sessions, and authentication (register/reconnect/secret hashing)
 - **Semantic APIs** — DMs, broadcast channels, notes (with tags), thoughts (chain-of-thought logging), memory (store/recall), notifications
-- **Admin panel** — built-in HTTP dashboard with REST API for stats, channel browsing, message inspection, and throughput monitoring
+- **Admin panel** — built-in HTTP dashboard with REST API for stats, channel browsing, message inspection, and throughput monitoring; modular `admin/routes/` subpackage with dict-based dispatch
 - **Flexible connection** — connect via Bus object, file path (SQLite), or `:memory:` string; URL schemes (`http://`, `redis://`) reserved for future transports
 - **Zero runtime dependencies** — pure Python, stdlib only
 
@@ -68,6 +68,7 @@ Piazza follows a layered architecture inspired by messaging middleware, adapted 
 | **Routing** | `Bus` | Channel management, pub/sub dispatch, UUID generation |
 | **Transport** | `Transport` protocol | Abstraction for local vs. remote bus access (`LocalTransport`) |
 | **Agent API** | `PiazzaClient` | Identity, cursors, auth, semantic messaging APIs |
+| **Frontend** | `Frontend` protocol | 🔄 Network-facing servers (REST + SSE) binding to Bus (`HttpFrontend`, `PiazzaServer`) |
 | **Admin** | `AdminServer` | HTTP dashboard + REST API for monitoring |
 
 For detailed design rationale, see [DESIGN_EN.md](docs/DESIGN_EN.md).
@@ -137,7 +138,8 @@ print(f"Dashboard: {info.url}")
 
 ## Roadmap
 
-- [ ] **RemoteTransport** — HTTP/WebSocket client-server mode
+- [ ] **RemoteTransport** — 🔄 In Progress (`dev/agent-bus`): `HttpFrontend`, `PiazzaServer`, `HttpTransport` implemented; pending merge
+- [ ] **IRC Frontend** — planned additional Frontend implementation
 - [ ] **Message TTL** — automatic expiry and cleanup
 - [ ] **Semantic memory recall** — vector embedding search
 - [ ] **Channel ACL** — per-channel access control

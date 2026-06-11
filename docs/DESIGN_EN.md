@@ -40,6 +40,10 @@ Piazza is a messaging backbone system designed for LLMs/Agents, providing unifie
 │  (Stateful wrapper: identity, cursors, channel naming,     │
 │   semantic business API)                                    │
 ├─────────────────────────────────────────────────────────────┤
+│                   Frontend Layer  🔄                        │
+│            HttpFrontend / (future: IRC, WS)                │
+│  (Network-facing servers: REST + SSE, attach to Bus)       │
+├─────────────────────────────────────────────────────────────┤
 │                       Bus Layer                             │
 │                         Bus                                 │
 │  (Orchestration: composes Backend + Serializer,            │
@@ -52,6 +56,8 @@ Piazza is a messaging backbone system designed for LLMs/Agents, providing unifie
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> **🔄 In Progress (`dev/agent-bus`):** The Frontend layer introduces a `Frontend` protocol with `attach(bus)` / `serve_forever()` / `shutdown()` methods. `HttpFrontend` is the first implementation, providing REST endpoints and SSE streaming. `PiazzaServer` is the orchestrator that binds a Bus to one or more Frontends.
+
 Each layer depends only on the Protocol interface of the layer below, never on concrete implementations.
 
 ### 2.2 Component Relationships
@@ -62,10 +68,13 @@ PiazzaClient(target)
   ├── target = Bus object  → LocalTransport → Bus → Backend
   ├── target = "piazza.db" → auto-create Bus(SQLiteBackend) → LocalTransport
   ├── target = "redis://…" → auto-create Bus(RedisBackend) → LocalTransport
-  └── target = "http://…"  → RemoteTransport → PiazzaServer API
+  └── target = "http://…"  → HttpTransport → HttpFrontend → Bus → Backend
+                                               (via PiazzaServer)
 ```
 
 The Client SDK shields local/remote differences through the Transport abstraction, fully transparent to upper layers.
+
+> **Note:** The `Transport` protocol now includes `subscribe(channel, callback)` and `unsubscribe(subscription_id)` to support real-time event delivery across both local and remote transports.
 
 ---
 
@@ -499,7 +508,76 @@ Agent dies
   → channel_poll() resumes from the breakpoint
 ```
 
-### 3.6 Delivery Layer
+### 3.6 Frontend Layer & PiazzaServer
+
+> 🔄 **In Progress** — implemented on `dev/agent-bus`, pending merge to master.
+
+The Frontend layer enables the Hub-Server deployment mode by providing network-facing servers that attach to a Bus.
+
+#### Frontend Protocol
+
+```python
+class Frontend(Protocol):
+    def attach(self, bus: Bus) -> None:
+        """Bind this frontend to a Bus instance."""
+        ...
+
+    def serve_forever(self) -> None:
+        """Start serving (blocking)."""
+        ...
+
+    def shutdown(self) -> None:
+        """Graceful shutdown."""
+        ...
+```
+
+#### HttpFrontend
+
+The first Frontend implementation, providing:
+- **REST API** — publish, poll, list channels
+- **SSE (Server-Sent Events)** — real-time message streaming via `subscribe`
+
+#### PiazzaServer
+
+The orchestrator that binds a Bus to one or more Frontends:
+
+```python
+server = PiazzaServer(bus)
+server.add_frontend(HttpFrontend(host="0.0.0.0", port=8741))
+server.serve_forever()
+```
+
+#### HttpTransport
+
+Client-side counterpart to HttpFrontend, implementing the Transport protocol over HTTP:
+
+```python
+# Client connects to remote PiazzaServer
+client = PiazzaClient("http://piazza:8741", "agent-1", secret="sk-xxx")
+# → Uses HttpTransport internally
+```
+
+### 3.7 Admin Panel
+
+The admin panel provides an HTTP dashboard for bus inspection and monitoring. Admin handlers are organized as a modular `admin/routes/` subpackage using dict-based dispatch:
+
+```
+admin/
+├── server.py          # AdminServer (HTTP server lifecycle)
+├── auth.py            # Authentication helpers
+├── handlers.py        # Top-level handler + dict-based dispatch
+├── static.py          # Static asset serving
+└── routes/
+    ├── __init__.py    # ROUTE_TABLE (path → handler mapping)
+    ├── _shared.py     # Shared utilities (JSON response, error handling)
+    ├── channels.py    # /api/channels, /api/channels/{name}
+    ├── dashboard.py   # /api/dashboard (stats + throughput)
+    ├── messages.py    # /api/messages/{channel}
+    ├── subscriptions.py  # /api/subscriptions
+    └── ui.py          # / (HTML dashboard)
+```
+
+### 3.8 Delivery Layer
 
 The Delivery Layer exposes Client SDK capabilities to external consumers.
 
@@ -530,7 +608,7 @@ PiazzaClient methods can be uniformly exposed as MCP tools, REST APIs, and CLI c
 
 ## 4. Communication Patterns
 
-### Sync vs. Async
+### 4.1 Sync vs. Async
 
 | Scenario | Pattern | Description |
 |----------|---------|-------------|
