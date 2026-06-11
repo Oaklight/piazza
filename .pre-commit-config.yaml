@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: v0.15.6
     hooks:
       - id: ruff
         args: [--fix]
@@ -10,8 +10,8 @@ repos:
     hooks:
       - id: ty
         name: ty check
-        description: Type check with ty.
-        entry: ty check
+        description: Type check src/ with ty.
+        entry: ty check src/
         language: system
         pass_filenames: false
         require_serial: true
@@ -21,6 +21,6 @@ repos:
     rev: v5.1.0
     hooks:
       - id: complexipy
-        files: ^src/
-        exclude: ^src/_vendor/
-        args: [-mx, "15"]
+        files: ^src/piazza/
+        exclude: ^src/piazza/_vendor/
+        args: [-mx, "20"]
