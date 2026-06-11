@@ -13,10 +13,11 @@ if TYPE_CHECKING:
 def handle_get_channels(handler: AdminRequestHandler) -> None:
     """Handle GET /api/channels — list all channels with stats."""
     stats = handler.bus.backend.get_stats()
+    sub_info = handler.bus.subscription_counts()
     channels = []
     for bd in stats.get("channel_breakdown", []):
         ch_name = bd["channel"]
-        sub_count = len(handler.bus._subs.get(ch_name, {}))
+        sub_count = len(sub_info.get(ch_name, []))
         channels.append(
             {
                 "name": ch_name,
@@ -50,7 +51,7 @@ def handle_get_channel(handler: AdminRequestHandler, name: str) -> None:
         {"msg_type": t, "count": c}
         for t, c in sorted(type_counts.items(), key=lambda x: x[1], reverse=True)
     ]
-    sub_count = len(handler.bus._subs.get(name, {}))
+    sub_count = len(handler.bus.subscription_counts().get(name, []))
 
     send_json_response(
         handler,

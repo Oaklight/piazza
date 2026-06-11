@@ -1,12 +1,16 @@
 """Shared response helpers for admin route handlers."""
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..handlers import AdminRequestHandler
 
 
-def send_cors_headers(handler: BaseHTTPRequestHandler) -> None:
+def send_cors_headers(handler: AdminRequestHandler) -> None:
     """Send CORS headers on the response."""
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -20,7 +24,7 @@ def json_serializer(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def send_json_response(handler: BaseHTTPRequestHandler, data: Any, status: int = 200) -> None:
+def send_json_response(handler: AdminRequestHandler, data: Any, status: int = 200) -> None:
     """Send a JSON response with CORS headers."""
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
@@ -31,12 +35,12 @@ def send_json_response(handler: BaseHTTPRequestHandler, data: Any, status: int =
 
 
 def send_error_response(
-    handler: BaseHTTPRequestHandler, status: int, error: str, message: str
+    handler: AdminRequestHandler, status: int, error: str, message: str
 ) -> None:
     """Send an error JSON response."""
     send_json_response(handler, {"error": error, "message": message}, status)
 
 
-def send_not_found(handler: BaseHTTPRequestHandler) -> None:
+def send_not_found(handler: AdminRequestHandler) -> None:
     """Send a 404 Not Found response."""
     send_error_response(handler, 404, "Not Found", f"Path not found: {handler.path}")

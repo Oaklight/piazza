@@ -20,7 +20,12 @@ def handle_get_messages(handler: AdminRequestHandler, query: dict[str, list[str]
 
     channel = channel_list[0]
     after = query.get("after", [None])[0]
-    limit = int(query.get("limit", ["100"])[0])
+    try:
+        limit = int(query.get("limit", ["100"])[0])
+    except (ValueError, TypeError):
+        send_error_response(handler, 400, "Bad Request", "Invalid 'limit' parameter")
+        return
+    limit = max(1, min(limit, 500))
     sender = query.get("sender", [None])[0]
     msg_type = query.get("msg_type", [None])[0]
 

@@ -22,9 +22,9 @@ def handle_get_stats(handler: AdminRequestHandler) -> None:
     """Handle GET /api/stats — dashboard aggregates."""
     stats = handler.bus.backend.get_stats()
 
-    # Add subscription count from bus internals
-    total_subs = sum(len(subs) for subs in handler.bus._subs.values())
-    stats["active_subscriptions"] = total_subs
+    # Add subscription count from bus
+    sub_info = handler.bus.subscription_counts()
+    stats["active_subscriptions"] = sum(len(ids) for ids in sub_info.values())
 
     send_json_response(handler, stats)
 

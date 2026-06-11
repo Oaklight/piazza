@@ -1,10 +1,13 @@
 """HTTP request handler for admin panel.
 
 Thin dispatcher that routes requests to focused handler modules
-under ``routes/``.
+under ``routes/``.  Uses dict-based dispatch for easy extensibility.
 """
 
+from __future__ import annotations
+
 import urllib.parse
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -14,6 +17,22 @@ if TYPE_CHECKING:
     from piazza.bus import Bus
 
     from .auth import TokenAuth
+
+
+# GET routes: path → handler(self)
+_GET_ROUTES: dict[str, Callable[..., None]] = {
+    "/": ui.handle_root,
+    "/api/stats": dashboard.handle_get_stats,
+    "/api/stats/throughput": dashboard.handle_get_throughput,
+    "/api/channels": channels.handle_get_channels,
+    "/api/messages": lambda self, query: messages.handle_get_messages(self, query),
+    "/api/subscriptions": subscriptions.handle_get_subscriptions,
+}
+
+# POST routes: path → handler(self, body)
+_POST_ROUTES: dict[str, Callable[..., None]] = {
+    "/api/messages": lambda self, body: messages.handle_publish_message(self, body),
+}
 
 
 class AdminRequestHandler(BaseHTTPRequestHandler):
@@ -31,8 +50,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         serve_ui: Whether to serve the admin UI at root path.
     """
 
-    bus: ClassVar["Bus"]
-    auth: ClassVar["TokenAuth | None"]
+    bus: ClassVar[Bus]
+    auth: ClassVar[TokenAuth | None]
     serve_ui: ClassVar[bool]
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -47,23 +66,22 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
-        if path == "/":
-            ui.handle_root(self)
-        elif path == "/api/stats":
-            dashboard.handle_get_stats(self)
-        elif path == "/api/stats/throughput":
-            dashboard.handle_get_throughput(self)
-        elif path == "/api/channels":
-            channels.handle_get_channels(self)
-        elif path.startswith("/api/channels/"):
+        # Exact match
+        handler_fn = _GET_ROUTES.get(path)
+        if handler_fn is not None:
+            if path == "/api/messages":
+                handler_fn(self, query)
+            else:
+                handler_fn(self)
+            return
+
+        # Prefix match: /api/channels/{name}
+        if path.startswith("/api/channels/"):
             name = urllib.parse.unquote(path[len("/api/channels/") :])
             channels.handle_get_channel(self, name)
-        elif path == "/api/messages":
-            messages.handle_get_messages(self, query)
-        elif path == "/api/subscriptions":
-            subscriptions.handle_get_subscriptions(self)
-        else:
-            _shared.send_not_found(self)
+            return
+
+        _shared.send_not_found(self)
 
     def do_POST(self) -> None:
         """Handle POST requests."""
@@ -76,10 +94,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
-        if path == "/api/messages":
-            messages.handle_publish_message(self, body)
-        else:
-            _shared.send_not_found(self)
+        handler_fn = _POST_ROUTES.get(path)
+        if handler_fn is not None:
+            handler_fn(self, body)
+            return
+
+        _shared.send_not_found(self)
 
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests."""

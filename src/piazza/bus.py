@@ -199,6 +199,16 @@ class Bus:
         """
         return self._backend.list_channels()
 
+    def subscription_counts(self) -> dict[str, list[str]]:
+        """Return subscription IDs grouped by channel.
+
+        Only channels with active subscriptions are included.
+
+        Returns:
+            Mapping of channel name to list of subscription IDs.
+        """
+        return {channel: list(subs.keys()) for channel, subs in self._subs.items() if subs}
+
     def start_admin(
         self,
         host: str = "127.0.0.1",
