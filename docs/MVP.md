@@ -1,6 +1,6 @@
 # piazza MVP — Implementation Reference
 
-**Date:** 2026-04-20
+**Date:** 2026-04-20 (last updated 2026-06-11)
 **Status:** ✅ Implemented
 
 ---
@@ -19,12 +19,13 @@ piazza MVP provides a minimal, zero-dependency message bus for multi-agent conte
 | **Bus** | `SQLiteBus` — convenience shorthand for `Bus(backend=SQLiteBackend(...))` | ✅ |
 | **Serializer** | `JSONSerializer` — human-readable metadata encoding | ✅ |
 | **Client SDK** | `PiazzaClient` — identity, cursor, channel naming, semantic API | ✅ |
-| **Admin** | Admin panel — HTTP dashboard for bus inspection | ✅ |
+| **Admin** | Admin panel — modular HTTP dashboard with route-based handlers | ✅ |
 
 ### What's Deferred
 
 - Hub-Server architecture (PiazzaServer + RemoteTransport)
-- Additional Backends (Redis, RabbitMQ, etc.)
+- IRC Frontend (expose Bus via IRC protocol for human observation)
+- Additional Backends (NATS JetStream, Redis Streams, etc.)
 - Typed channel enforcement at Bus layer
 - Moderator mechanism
 - Message TTL / retention signals
@@ -96,6 +97,25 @@ client = PiazzaClient("workspace/.piazza.db", "agent-1")
 │    SQLiteBackend  │  MemoryBackend           │
 │    (WAL mode)     │  (testing)               │
 └──────────────────────────────────────────────┘
+```
+
+### Admin Panel Structure
+
+The admin panel uses a modular route architecture (since PR #17):
+
+```
+admin/
+├── handlers.py          # thin dispatcher (~80 lines)
+├── server.py            # AdminServer lifecycle
+├── auth.py              # token authentication
+├── static.py            # embedded HTML
+└── routes/
+    ├── _shared.py       # response helpers (JSON, CORS, error)
+    ├── ui.py            # root path serving
+    ├── dashboard.py     # stats + throughput
+    ├── channels.py      # channel list + detail
+    ├── messages.py      # message query + publish
+    └── subscriptions.py # subscription listing
 ```
 
 ---
@@ -309,8 +329,8 @@ new_msgs = client_b.channel_poll("sync")
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `test_bus.py` | Message, Serializer, Backends, Bus, SQLiteBus | 98 |
-| `test_client.py` | Transport, Identity, Constructor, Lifecycle, Core API, Sugar API, Cursor, Auth | 67 |
-| `test_admin.py` | Backend extensions, Auth, Admin Server, Admin API | 20 |
+| `test_bus.py` | Message, Serializer, Backends, Bus, SQLiteBus | 44 |
+| `test_client.py` | Transport, Identity, Constructor, Lifecycle, Core API, Sugar API, Cursor, Auth | 87 |
+| `test_admin.py` | Backend extensions, Auth, Admin Server, Admin API, Route modules | 54 |
 
 All functions pass complexipy (max complexity ≤ 15).
