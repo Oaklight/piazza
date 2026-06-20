@@ -74,7 +74,7 @@ class SQLiteBackend:
             except sqlite3.OperationalError as e:
                 if "locked" not in str(e).lower() or i == attempts:
                     raise
-                if i == 10:
+                if i >= 10 and i % 10 == 0:
                     logger.warning(
                         "WAL journal_mode switch still locked after %d attempts "
                         "(db=%s), continuing to retry...",
