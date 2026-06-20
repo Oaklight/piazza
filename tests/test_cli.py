@@ -1,58 +1,233 @@
 """Tests for piazza CLI."""
 
+import argparse
+import json
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
-from piazza.cli import _redact_token, parse_args
+from piazza import Bus, MemoryBackend, PiazzaServer
+from piazza.cli import _parse_host_port, _redact_token, parse_args
+from piazza.frontends import HttpFrontend
+
+# ── Parse Args ────────────────────────────────────────────────────
 
 
-class TestParseArgs:
-    """Tests for CLI argument parsing."""
+class TestParseArgsServe:
+    """Tests for serve subcommand argument parsing."""
 
-    def test_defaults(self):
+    def test_defaults_no_subcommand(self):
+        """No subcommand defaults to serve."""
         args = parse_args([])
+        assert args.command == "serve"
         assert args.db == "piazza.db"
-        assert args.host == "127.0.0.1"
-        assert args.port == 8741
+        assert args.admin_port == 8741
+        assert args.http is None
         assert args.remote is False
         assert args.token is None
         assert args.no_ui is False
         assert args.log_level == "INFO"
 
-    def test_custom_db(self):
-        args = parse_args(["-d", "custom.db"])
+    def test_explicit_serve(self):
+        args = parse_args(["serve"])
+        assert args.command == "serve"
+
+    def test_serve_custom_db(self):
+        args = parse_args(["serve", "-d", "custom.db"])
         assert args.db == "custom.db"
 
-    def test_custom_host_port(self):
-        args = parse_args(["-H", "0.0.0.0", "-p", "9000"])
-        assert args.host == "0.0.0.0"
-        assert args.port == 9000
+    def test_serve_http_port_only(self):
+        args = parse_args(["serve", "--http", "8742"])
+        assert args.http == "8742"
 
-    def test_remote_flag(self):
-        args = parse_args(["--remote"])
+    def test_serve_http_host_port(self):
+        args = parse_args(["serve", "--http", "0.0.0.0:8742"])
+        assert args.http == "0.0.0.0:8742"
+
+    def test_serve_admin_port(self):
+        args = parse_args(["serve", "--admin-port", "9000"])
+        assert args.admin_port == 9000
+
+    def test_serve_remote(self):
+        args = parse_args(["serve", "--remote"])
         assert args.remote is True
 
-    def test_token(self):
-        args = parse_args(["--token", "my-secret"])
+    def test_serve_token(self):
+        args = parse_args(["serve", "--token", "my-secret"])
         assert args.token == "my-secret"
 
-    def test_no_ui(self):
-        args = parse_args(["--no-ui"])
+    def test_serve_no_ui(self):
+        args = parse_args(["serve", "--no-ui"])
         assert args.no_ui is True
 
-    def test_log_level(self):
-        args = parse_args(["--log-level", "DEBUG"])
+    def test_serve_log_level(self):
+        args = parse_args(["serve", "--log-level", "DEBUG"])
         assert args.log_level == "DEBUG"
 
-    def test_invalid_log_level(self):
+    def test_serve_invalid_log_level(self):
         with pytest.raises(SystemExit):
-            parse_args(["--log-level", "TRACE"])
+            parse_args(["serve", "--log-level", "TRACE"])
+
+
+class TestParseArgsClient:
+    """Tests for client subcommand argument parsing."""
+
+    def test_client_send(self):
+        args = parse_args(
+            [
+                "client",
+                "send",
+                "-s",
+                "http://localhost:8742",
+                "-a",
+                "my-agent",
+                "-c",
+                "tasks",
+                "hello world",
+            ]
+        )
+        assert args.command == "client"
+        assert args.action == "send"
+        assert args.server == "http://localhost:8742"
+        assert args.agent == "my-agent"
+        assert args.channel == "tasks"
+        assert args.msg_type == "chat"
+        assert args.message == "hello world"
+
+    def test_client_send_custom_type(self):
+        args = parse_args(
+            [
+                "client",
+                "send",
+                "-s",
+                "http://x:8742",
+                "-a",
+                "aaa",
+                "-c",
+                "ch",
+                "-t",
+                "notice",
+                "msg",
+            ]
+        )
+        assert args.msg_type == "notice"
+
+    def test_client_poll(self):
+        args = parse_args(
+            [
+                "client",
+                "poll",
+                "-s",
+                "http://localhost:8742",
+                "-a",
+                "my-agent",
+                "-c",
+                "tasks",
+            ]
+        )
+        assert args.action == "poll"
+        assert args.channel == "tasks"
+        assert args.limit == 10
+        assert args.follow is False
+
+    def test_client_poll_follow(self):
+        args = parse_args(
+            [
+                "client",
+                "poll",
+                "-s",
+                "http://x:8742",
+                "-a",
+                "aaa",
+                "-c",
+                "ch",
+                "--follow",
+            ]
+        )
+        assert args.follow is True
+
+    def test_client_poll_limit(self):
+        args = parse_args(
+            [
+                "client",
+                "poll",
+                "-s",
+                "http://x:8742",
+                "-a",
+                "aaa",
+                "-c",
+                "ch",
+                "-n",
+                "50",
+            ]
+        )
+        assert args.limit == 50
+
+    def test_client_channels(self):
+        args = parse_args(
+            [
+                "client",
+                "channels",
+                "-s",
+                "http://localhost:8742",
+                "-a",
+                "my-agent",
+            ]
+        )
+        assert args.action == "channels"
+
+    def test_client_dm(self):
+        args = parse_args(
+            [
+                "client",
+                "dm",
+                "-s",
+                "http://localhost:8742",
+                "-a",
+                "alice",
+                "--to",
+                "bob",
+                "hey bob!",
+            ]
+        )
+        assert args.action == "dm"
+        assert args.to_agent == "bob"
+        assert args.message == "hey bob!"
+
+    def test_client_send_missing_server(self):
+        with pytest.raises(SystemExit):
+            parse_args(["client", "send", "-a", "aaa", "-c", "ch", "msg"])
+
+    def test_client_send_missing_agent(self):
+        with pytest.raises(SystemExit):
+            parse_args(["client", "send", "-s", "http://x:8742", "-c", "ch", "msg"])
+
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+
+class TestParseHostPort:
+    """Tests for _parse_host_port."""
+
+    def test_port_only(self):
+        assert _parse_host_port("8742") == ("127.0.0.1", 8742)
+
+    def test_host_and_port(self):
+        assert _parse_host_port("0.0.0.0:8742") == ("0.0.0.0", 8742)
+
+    def test_custom_default_host(self):
+        assert _parse_host_port("9000", default_host="0.0.0.0") == ("0.0.0.0", 9000)
 
     def test_invalid_port(self):
-        with pytest.raises(SystemExit):
-            parse_args(["-p", "not_a_number"])
+        with pytest.raises(argparse.ArgumentTypeError):
+            _parse_host_port("abc")
+
+    def test_invalid_host_port(self):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _parse_host_port("host:abc")
 
 
 class TestRedactToken:
@@ -83,8 +258,11 @@ class TestRedactToken:
         assert result == "abc...ij"
 
 
-class TestCliVersion:
-    """Test CLI version output via subprocess."""
+# ── CLI Subprocess Tests ──────────────────────────────────────────
+
+
+class TestCliSubprocess:
+    """Test CLI via subprocess."""
 
     def test_version_flag(self):
         result = subprocess.run(
@@ -102,5 +280,167 @@ class TestCliVersion:
             text=True,
         )
         assert result.returncode == 0
-        assert "--port" in result.stdout
-        assert "--remote" in result.stdout
+        assert "serve" in result.stdout
+        assert "client" in result.stdout
+
+    def test_serve_help(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "piazza.cli", "serve", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--http" in result.stdout
+        assert "--admin-port" in result.stdout
+
+    def test_client_help(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "piazza.cli", "client", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "send" in result.stdout
+        assert "poll" in result.stdout
+        assert "channels" in result.stdout
+        assert "dm" in result.stdout
+
+
+# ── Integration Tests ─────────────────────────────────────────────
+
+
+@pytest.fixture()
+def http_server_url():
+    """Start a PiazzaServer with HttpFrontend on a random port, yield URL."""
+    bus = Bus(backend=MemoryBackend())
+    frontend = HttpFrontend(host="127.0.0.1", port=0)
+    server = PiazzaServer(bus)
+    server.add_frontend(frontend)
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.3)
+    host, port = frontend.address
+    url = f"http://{host}:{port}"
+
+    yield url
+
+    server.shutdown()
+
+
+class TestClientIntegration:
+    """Integration tests: subprocess client commands against a live server."""
+
+    def test_send_and_poll(self, http_server_url: str) -> None:
+        """Send a message via CLI, then poll it back."""
+        # Send
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "piazza.cli",
+                "client",
+                "send",
+                "-s",
+                http_server_url,
+                "-a",
+                "test-agent",
+                "-c",
+                "test-ch",
+                "hello from cli",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        msg_id = result.stdout.strip()
+        assert msg_id  # should print message ID
+
+        # Poll
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "piazza.cli",
+                "client",
+                "poll",
+                "-s",
+                http_server_url,
+                "-a",
+                "test-agent",
+                "-c",
+                "test-ch",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        messages = [json.loads(line) for line in result.stdout.strip().split("\n")]
+        assert len(messages) >= 1
+        assert any(m["payload"] == "hello from cli" for m in messages)
+
+    def test_channels(self, http_server_url: str) -> None:
+        """List channels after sending a message."""
+        # Send to create a channel
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "piazza.cli",
+                "client",
+                "send",
+                "-s",
+                http_server_url,
+                "-a",
+                "test-agent",
+                "-c",
+                "my-channel",
+                "seed",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # List channels
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "piazza.cli",
+                "client",
+                "channels",
+                "-s",
+                http_server_url,
+                "-a",
+                "test-agent",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        channels = result.stdout.strip().split("\n")
+        assert "my-channel" in channels
+
+    def test_dm(self, http_server_url: str) -> None:
+        """Send a DM via CLI."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "piazza.cli",
+                "client",
+                "dm",
+                "-s",
+                http_server_url,
+                "-a",
+                "alice",
+                "--to",
+                "bob",
+                "hey bob!",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        msg_id = result.stdout.strip()
+        assert msg_id
