@@ -1,7 +1,9 @@
 """Tests for piazza message bus and modular components."""
 
 import json
+import multiprocessing as mp
 import sqlite3
+import time
 
 import pytest
 
@@ -15,7 +17,12 @@ from piazza import (
 )
 
 
-def _concurrent_open_worker(db_path: str, idx: int, start_evt, q) -> None:
+def _concurrent_open_worker(
+    db_path: str,
+    idx: int,
+    start_evt: mp.Event,
+    q: mp.Queue,  # type: ignore[type-arg]
+) -> None:
     """Module-level worker for test_concurrent_cold_start.
 
     Waits on start_evt so all workers race the WAL switch at the same
@@ -42,6 +49,7 @@ def _concurrent_open_worker(db_path: str, idx: int, start_evt, q) -> None:
         q.put((idx, None))
     except Exception as e:  # noqa: BLE001
         q.put((idx, f"{type(e).__name__}: {e}"))
+
 
 # ──────────────────────────────────────────────
 # Message dataclass
@@ -262,8 +270,6 @@ class TestSQLiteBackend:
         backend must set busy_timeout before any other PRAGMA so the
         WAL switch waits for the lock instead of crashing.
         """
-        import multiprocessing as mp
-
         db = tmp_path / "concurrent.db"
 
         ctx = mp.get_context("spawn")
@@ -280,9 +286,7 @@ class TestSQLiteBackend:
         for p in procs:
             p.start()
         # Give workers time to spawn + import + reach wait()
-        import time as _time
-
-        _time.sleep(0.5)
+        time.sleep(0.5)
         start_evt.set()
         for p in procs:
             p.join(timeout=15)

@@ -42,25 +42,6 @@ def server_url():
     server.shutdown()
 
 
-@pytest.fixture()
-def server_url_with_auth():
-    """Start a PiazzaServer with auth enabled."""
-    bus = Bus(backend=MemoryBackend(), require_auth=True)
-    frontend = HttpFrontend(host="127.0.0.1", port=0)
-    server = PiazzaServer(bus)
-    server.add_frontend(frontend)
-
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    time.sleep(0.3)
-    host, port = frontend.address
-    url = f"http://{host}:{port}"
-
-    yield url
-
-    server.shutdown()
-
-
 # ── Transport Protocol Tests ─────────────────────────────────────
 
 
