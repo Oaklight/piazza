@@ -185,14 +185,17 @@ class _HttpHandler(BaseHTTPRequestHandler):
         # Subscribe to each channel on the bus
         def _make_callback(ch: str):
             def _cb(msg):
-                # Drop if subscriber is too slow (v0.1: no backpressure)
-                with contextlib.suppress(queue.Full):
+                try:
                     client.q.put_nowait(
                         {
                             "channel": ch,
                             "message": self._msg_to_dict(msg),
                         }
                     )
+                except queue.Full:
+                    # Notify the slow consumer that events were dropped
+                    with contextlib.suppress(queue.Full):
+                        client.q.put_nowait({"_dropped": True, "channel": ch})
 
             return _cb
 
@@ -223,6 +226,16 @@ class _HttpHandler(BaseHTTPRequestHandler):
 
                 if event is None:
                     break  # shutdown signal
+
+                if event.get("_dropped"):
+                    # Warn client about dropped events
+                    try:
+                        ch = event.get("channel", "?")
+                        self.wfile.write(f": dropped events on {ch}\n\n".encode())
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+                    continue
 
                 data = json.dumps(event, ensure_ascii=False)
                 try:

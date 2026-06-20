@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from piazza.types import Message
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS messages (
@@ -71,6 +74,13 @@ class SQLiteBackend:
             except sqlite3.OperationalError as e:
                 if "locked" not in str(e).lower() or i == attempts:
                     raise
+                if i == 10:
+                    logger.warning(
+                        "WAL journal_mode switch still locked after %d attempts "
+                        "(db=%s), continuing to retry...",
+                        i,
+                        self._db_path,
+                    )
                 time.sleep(base_delay * i)
 
     def store(self, message: Message) -> None:
