@@ -28,6 +28,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from piazza.bus import Bus
 
+# Limits
+_MAX_BODY_BYTES = 1_048_576  # 1 MB
+_MAX_QUERY_LIMIT = 10_000
+
 
 class _SseClient:
     """Tracks one SSE connection's subscriptions and message queue."""
@@ -46,6 +50,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
     bus: Bus  # set by HttpFrontend before serving
     sse_clients: list[_SseClient]  # shared mutable list
     sse_lock: threading.Lock
+    cors_origin: str  # set by HttpFrontend
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress default HTTP logging."""
@@ -115,7 +120,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
             return
 
         after = self._qs_first(qs, "after")
-        limit = int(self._qs_first(qs, "limit") or "100")
+        limit = min(int(self._qs_first(qs, "limit") or "100"), _MAX_QUERY_LIMIT)
 
         msgs = self.bus.poll(channel, after=after, limit=limit)
         self._json(
@@ -234,6 +239,9 @@ class _HttpHandler(BaseHTTPRequestHandler):
         if length == 0:
             self._error(400, "Bad Request", "Empty body")
             return None
+        if length > _MAX_BODY_BYTES:
+            self._error(413, "Payload Too Large", f"Body exceeds {_MAX_BODY_BYTES} bytes")
+            return None
         try:
             return json.loads(self.rfile.read(length))
         except json.JSONDecodeError as e:
@@ -252,7 +260,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
         self._json({"error": error, "message": message}, status)
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self.cors_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
@@ -283,11 +291,13 @@ class HttpFrontend:
     Args:
         host: Bind address. Default "127.0.0.1".
         port: Bind port. Default 8741.
+        cors_origin: Access-Control-Allow-Origin value. Default "*".
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8741) -> None:
+    def __init__(self, host: str = "127.0.0.1", port: int = 8741, cors_origin: str = "*") -> None:
         self._host = host
         self._port = port
+        self._cors_origin = cors_origin
         self._bus: Bus | None = None
         self._server: ThreadingHTTPServer | None = None
         self._sse_clients: list[_SseClient] = []
@@ -323,6 +333,7 @@ class HttpFrontend:
                 "bus": self._bus,
                 "sse_clients": self._sse_clients,
                 "sse_lock": self._sse_lock,
+                "cors_origin": self._cors_origin,
             },
         )
 
