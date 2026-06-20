@@ -7,9 +7,25 @@ and interacting with the message bus.
 import argparse
 import logging
 import signal
-import sys
+import threading
 
 from piazza import SQLiteBus, __version__
+
+
+def _redact_token(token: str, head: int = 8, tail: int = 4) -> str:
+    """Redact a token for safe logging, showing only head and tail.
+
+    Args:
+        token: The full token string.
+        head: Number of leading characters to show.
+        tail: Number of trailing characters to show.
+
+    Returns:
+        Redacted string like ``"sk-abcd1...xyz9"``.
+    """
+    if len(token) <= head + tail:
+        return token
+    return f"{token[:head]}...{token[-tail:]}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -101,24 +117,23 @@ def main(argv: list[str] | None = None) -> None:
 
     logger.info("Admin panel: %s", info.url)
     if info.token:
-        logger.info("Auth token: %s", info.token)
+        logger.info("Auth token: %s", _redact_token(info.token))
 
-    # Block until SIGINT/SIGTERM
-    shutdown = False
+    # Block until SIGINT/SIGTERM.
+    # Signal handler only sets an Event — all cleanup runs in the main
+    # thread to avoid reentrant calls into Bus/HTTPServer from a signal
+    # handler context.
+    stop = threading.Event()
 
-    def handle_signal(signum: int, _frame: object) -> None:
-        nonlocal shutdown
-        if not shutdown:
-            shutdown = True
-            sig_name = signal.Signals(signum).name
-            logger.info("Received %s, shutting down...", sig_name)
-            bus.close()
-            sys.exit(0)
+    def handle_signal(_signum: int, _frame: object) -> None:
+        stop.set()
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    signal.pause()
+    stop.wait()
+    logger.info("Shutting down...")
+    bus.close()
 
 
 if __name__ == "__main__":
