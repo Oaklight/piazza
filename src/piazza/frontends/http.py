@@ -28,9 +28,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from piazza.bus import Bus
 
-# Limits
-_MAX_BODY_BYTES = 1_048_576  # 1 MB
-_MAX_QUERY_LIMIT = 10_000
+# Default limits
+_DEFAULT_MAX_BODY_BYTES = 1_048_576  # 1 MB
+_DEFAULT_MAX_QUERY_LIMIT = 10_000
 
 
 class _SseClient:
@@ -51,6 +51,8 @@ class _HttpHandler(BaseHTTPRequestHandler):
     sse_clients: list[_SseClient]  # shared mutable list
     sse_lock: threading.Lock
     cors_origin: str  # set by HttpFrontend
+    max_body_bytes: int  # set by HttpFrontend
+    max_query_limit: int  # set by HttpFrontend
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress default HTTP logging."""
@@ -120,7 +122,11 @@ class _HttpHandler(BaseHTTPRequestHandler):
             return
 
         after = self._qs_first(qs, "after")
-        limit = min(int(self._qs_first(qs, "limit") or "100"), _MAX_QUERY_LIMIT)
+        try:
+            limit = min(int(self._qs_first(qs, "limit") or "100"), self.max_query_limit)
+        except ValueError:
+            self._error(400, "Bad Request", "Query param 'limit' must be an integer")
+            return
 
         msgs = self.bus.poll(channel, after=after, limit=limit)
         self._json(
@@ -239,8 +245,8 @@ class _HttpHandler(BaseHTTPRequestHandler):
         if length == 0:
             self._error(400, "Bad Request", "Empty body")
             return None
-        if length > _MAX_BODY_BYTES:
-            self._error(413, "Payload Too Large", f"Body exceeds {_MAX_BODY_BYTES} bytes")
+        if length > self.max_body_bytes:
+            self._error(413, "Payload Too Large", f"Body exceeds {self.max_body_bytes} bytes")
             return None
         try:
             return json.loads(self.rfile.read(length))
@@ -292,12 +298,23 @@ class HttpFrontend:
         host: Bind address. Default "127.0.0.1".
         port: Bind port. Default 8741.
         cors_origin: Access-Control-Allow-Origin value. Default "*".
+        max_body_bytes: Maximum request body size in bytes. Default 1MB.
+        max_query_limit: Maximum query limit parameter. Default 10000.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8741, cors_origin: str = "*") -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8741,
+        cors_origin: str = "*",
+        max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
+        max_query_limit: int = _DEFAULT_MAX_QUERY_LIMIT,
+    ) -> None:
         self._host = host
         self._port = port
         self._cors_origin = cors_origin
+        self._max_body_bytes = max_body_bytes
+        self._max_query_limit = max_query_limit
         self._bus: Bus | None = None
         self._server: ThreadingHTTPServer | None = None
         self._sse_clients: list[_SseClient] = []
@@ -334,6 +351,8 @@ class HttpFrontend:
                 "sse_clients": self._sse_clients,
                 "sse_lock": self._sse_lock,
                 "cors_origin": self._cors_origin,
+                "max_body_bytes": self._max_body_bytes,
+                "max_query_limit": self._max_query_limit,
             },
         )
 
