@@ -14,6 +14,7 @@ import signal
 import sys
 import threading
 import time
+import urllib.error
 
 from piazza import SQLiteBus, __version__
 
@@ -251,7 +252,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             daemon=True,
         )
         http_thread.start()
-        time.sleep(0.2)  # let server bind
+        # Wait for server to bind (port changes from 0 to actual)
+        for _ in range(50):
+            _, actual_port = http_frontend.address
+            if actual_port != 0:
+                break
+            time.sleep(0.01)
         actual_host, actual_port = http_frontend.address
         logger.info("HttpFrontend: http://%s:%d", actual_host, actual_port)
 
@@ -354,12 +360,16 @@ def _cmd_client_dm(args: argparse.Namespace) -> None:
     Args:
         args: Parsed arguments namespace.
     """
-    from piazza.client import PiazzaClient
+    from piazza.transport_http import HttpTransport
 
-    client = PiazzaClient(args.server, args.agent)
-    msg_id = client.dm_send(args.to_agent, args.message)
+    # Compute canonical DM channel (same logic as PiazzaClient._dm_channel)
+    pair = sorted([args.agent, args.to_agent])
+    channel = f"dm:{pair[0]}:{pair[1]}"
+
+    transport = HttpTransport(args.server, agent_id=args.agent)
+    msg_id = transport.publish(channel, args.agent, "chat", args.message)
     print(msg_id)
-    client.close()
+    transport.close()
 
 
 # ── Entry Point ───────────────────────────────────────────────────
@@ -385,7 +395,11 @@ def main(argv: list[str] | None = None) -> None:
             "channels": _cmd_client_channels,
             "dm": _cmd_client_dm,
         }
-        handlers[args.action](args)
+        try:
+            handlers[args.action](args)
+        except (urllib.error.URLError, ConnectionError, OSError) as e:
+            print(f"error: cannot connect to {args.server}: {e}", file=sys.stderr)
+            sys.exit(1)
     else:
         _build_parser().print_help()
         sys.exit(1)
