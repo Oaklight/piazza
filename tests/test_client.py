@@ -228,13 +228,25 @@ class TestPiazzaClientConstructor:
         # DB file should exist
         assert (tmp_path / "test.db").exists()
 
-    def test_http_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="http"):
-            PiazzaClient("http://localhost:8741", "test-agent")
+    def test_http_uses_http_transport(self):
+        from piazza.transport_http import HttpTransport
 
-    def test_https_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError, match="http"):
-            PiazzaClient("https://piazza.example.com", "test-agent")
+        stub = type("_Stub", (), {"_agent_id": "test-agent"})()
+        t, bus, owns = PiazzaClient._resolve_target(stub, "http://localhost:9999")
+        assert isinstance(t, HttpTransport)
+        assert bus is None
+        assert owns is False
+        t.close()
+
+    def test_https_uses_http_transport(self):
+        from piazza.transport_http import HttpTransport
+
+        stub = type("_Stub", (), {"_agent_id": "test-agent"})()
+        t, bus, owns = PiazzaClient._resolve_target(stub, "https://piazza.example.com")
+        assert isinstance(t, HttpTransport)
+        assert bus is None
+        assert owns is False
+        t.close()
 
     def test_redis_raises_not_implemented(self):
         with pytest.raises(NotImplementedError, match="redis"):

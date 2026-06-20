@@ -133,7 +133,9 @@ class PiazzaClient:
         # URL scheme detection
         lower = target.lower()
         if lower.startswith(("http://", "https://")):
-            raise NotImplementedError("Remote transport (http/https) is not yet implemented.")
+            from piazza.transport_http import HttpTransport
+
+            return HttpTransport(target, agent_id=self._agent_id), None, False
         if lower.startswith(("redis://", "amqp://")):
             raise NotImplementedError(
                 f"Backend for {lower.split('://')[0]}:// is not yet implemented."
