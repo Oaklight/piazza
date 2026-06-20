@@ -36,12 +36,13 @@ _DEFAULT_MAX_QUERY_LIMIT = 10_000
 class _SseClient:
     """Tracks one SSE connection's subscriptions and message queue."""
 
-    __slots__ = ("q", "sub_ids", "agent_id")
+    __slots__ = ("q", "sub_ids", "agent_id", "dropped_count")
 
     def __init__(self, agent_id: str) -> None:
         self.agent_id = agent_id
         self.q: queue.Queue[dict | None] = queue.Queue(maxsize=256)
         self.sub_ids: list[str] = []
+        self.dropped_count: int = 0
 
 
 class _HttpHandler(BaseHTTPRequestHandler):
@@ -193,9 +194,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
                         }
                     )
                 except queue.Full:
-                    # Notify the slow consumer that events were dropped
-                    with contextlib.suppress(queue.Full):
-                        client.q.put_nowait({"_dropped": True, "channel": ch})
+                    client.dropped_count += 1
 
             return _cb
 
@@ -216,9 +215,16 @@ class _HttpHandler(BaseHTTPRequestHandler):
                 try:
                     event = client.q.get(timeout=15)
                 except queue.Empty:
-                    # Send keepalive comment
+                    # Send keepalive; also report dropped events if any
                     try:
-                        self.wfile.write(b": keepalive\n\n")
+                        dropped = client.dropped_count
+                        if dropped > 0:
+                            client.dropped_count = 0
+                            self.wfile.write(
+                                f": {dropped} event(s) dropped (slow consumer)\n\n".encode()
+                            )
+                        else:
+                            self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                     except (BrokenPipeError, ConnectionResetError):
                         break
@@ -226,16 +232,6 @@ class _HttpHandler(BaseHTTPRequestHandler):
 
                 if event is None:
                     break  # shutdown signal
-
-                if event.get("_dropped"):
-                    # Warn client about dropped events
-                    try:
-                        ch = event.get("channel", "?")
-                        self.wfile.write(f": dropped events on {ch}\n\n".encode())
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        break
-                    continue
 
                 data = json.dumps(event, ensure_ascii=False)
                 try:
