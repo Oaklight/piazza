@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,9 +39,39 @@ class SQLiteBackend:
         self._db_path = str(db_path)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # Set busy_timeout BEFORE any other PRAGMA so subsequent
+        # statements wait for locks instead of failing immediately.
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        # Switching to WAL journal_mode requires an exclusive lock.
+        # SQLite's busy handler does NOT cover PRAGMA journal_mode
+        # mutations -- the lock contention surfaces as an immediate
+        # OperationalError("database is locked"). Retry with backoff
+        # so multiple processes can cold-start the same DB without
+        # racing each other.
+        self._enable_wal_with_retry()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+
+    def _enable_wal_with_retry(
+        self,
+        attempts: int = 50,
+        base_delay: float = 0.05,
+    ) -> None:
+        """Enable WAL journal mode, retrying on transient lock errors.
+
+        Args:
+            attempts: Maximum number of attempts before giving up.
+            base_delay: Base seconds to wait between attempts; actual
+                wait is base_delay * attempt_number (linear backoff).
+        """
+        for i in range(1, attempts + 1):
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e).lower() or i == attempts:
+                    raise
+                time.sleep(base_delay * i)
 
     def store(self, message: Message) -> None:
         """Persist a message to SQLite.
