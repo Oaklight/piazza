@@ -29,16 +29,50 @@ if TYPE_CHECKING:
     from piazza.bus import Bus
 
 
+class _AtomicCounter:
+    """Lock-free counter using list-swap for cross-thread drain.
+
+    Uses a single-element list as the backing store so that
+    ``drain()`` can atomically swap the entire list reference
+    (a single ``STORE_ATTR`` under CPython's GIL) while producers
+    keep incrementing the old list object — no increments are lost.
+
+    This avoids a threading.Lock on the hot ``increment()`` path
+    (called from every Bus publish callback) while keeping the
+    cold ``drain()`` path (called once per 15s keepalive) race-free.
+    """
+
+    __slots__ = ("_cell",)
+
+    def __init__(self) -> None:
+        self._cell: list[int] = [0]
+
+    def increment(self) -> None:
+        """Bump the counter (called from publisher threads)."""
+        self._cell[0] += 1
+
+    def drain(self) -> int:
+        """Return current count and reset to zero, atomically.
+
+        The swap is a single STORE_ATTR; any concurrent ``increment()``
+        that already loaded the old list reference writes to the old
+        list, which we still read via the local variable.
+        """
+        old = self._cell
+        self._cell = [0]
+        return old[0]
+
+
 class _SseClient:
     """Tracks one SSE connection's subscriptions and message queue."""
 
-    __slots__ = ("q", "sub_ids", "agent_id", "dropped_count")
+    __slots__ = ("q", "sub_ids", "agent_id", "dropped")
 
     def __init__(self, agent_id: str) -> None:
         self.agent_id = agent_id
         self.q: queue.Queue[dict | None] = queue.Queue(maxsize=256)
         self.sub_ids: list[str] = []
-        self.dropped_count: int = 0
+        self.dropped = _AtomicCounter()
 
 
 class _HttpHandler(BaseHTTPRequestHandler):
@@ -183,7 +217,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
                         }
                     )
                 except queue.Full:
-                    client.dropped_count += 1
+                    client.dropped.increment()
 
             return _cb
 
@@ -206,9 +240,8 @@ class _HttpHandler(BaseHTTPRequestHandler):
                 except queue.Empty:
                     # Send keepalive; also report dropped events if any
                     try:
-                        dropped = client.dropped_count
+                        dropped = client.dropped.drain()
                         if dropped > 0:
-                            client.dropped_count = 0
                             self.wfile.write(
                                 f": {dropped} event(s) dropped (slow consumer)\n\n".encode()
                             )
