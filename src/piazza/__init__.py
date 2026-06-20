@@ -7,6 +7,8 @@ from piazza.bus import Bus, SQLiteBus
 from piazza.client import PiazzaClient
 from piazza.protocols import Backend, MessageBus, Serializer
 from piazza.serializers import JSONSerializer
+from piazza.server import PiazzaServer
+from piazza.transport_http import HttpTransport
 from piazza.types import Message
 
 # Backward compatibility aliases (deprecated, will be removed)
@@ -17,12 +19,14 @@ StorageBackend = Backend
 __all__ = [
     "Backend",
     "Bus",
+    "HttpTransport",
     "JSONSerializer",
     "MemoryBackend",
     "MemoryStorage",
     "Message",
     "MessageBus",
     "PiazzaClient",
+    "PiazzaServer",
     "SQLiteBackend",
     "SQLiteBus",
     "SQLiteStorage",
