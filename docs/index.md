@@ -1,3 +1,7 @@
+---
+hide:
+  - navigation
+---
 # piazza
 
 **Agent messaging hub for multi-agent collaboration.**

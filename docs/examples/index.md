@@ -1,3 +1,7 @@
+---
+hide:
+  - navigation
+---
 # Examples
 
 ## Basic Usage
