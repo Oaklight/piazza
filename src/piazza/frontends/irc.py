@@ -57,16 +57,15 @@ class _IrcBridgeBot(irc.bot.SingleServerIRCBot):
         nickname: str,
         password: str | None = None,
     ) -> None:
-        connect_params = {}
+        connect_params: dict = {}
         if frontend._use_ssl:
-            factory = irc.connection.Factory(wrapper=self._ssl_wrapper)
-            connect_params["connect_factory"] = factory
+            connect_params["connect_factory"] = irc.connection.Factory(wrapper=self._ssl_wrapper)
 
         super().__init__(
             server_list,
             nickname,
             nickname,  # realname = nickname
-            connect_factory=connect_params.get("connect_factory"),
+            **connect_params,
         )
         self._frontend = frontend
         self._password = password
@@ -127,15 +126,14 @@ class _IrcBridgeBot(irc.bot.SingleServerIRCBot):
             metadata=metadata,
         )
 
-    def on_privmsg(self, connection, event):
-        """Handle private messages (DMs to the bot)."""
-        # For now, ignore private messages; could be extended
-        # to support piazza DM bridging in the future.
-        pass
-
     def on_disconnect(self, connection, event):
-        """Handle disconnection from IRC server."""
+        """Handle disconnection from IRC server.
+
+        Logs a warning, then delegates to the parent class which
+        handles automatic reconnection with exponential backoff.
+        """
         logger.warning("IRC bot disconnected from server")
+        super().on_disconnect(connection, event)
 
     def on_nicknameinuse(self, connection, event):
         """Handle nickname collision by appending underscore."""
@@ -301,9 +299,11 @@ class IrcFrontend:
                     # Format: "sender: payload"
                     text = f"{msg.sender}: {msg.payload}"
 
-                    # Truncate if too long for IRC
-                    if len(text.encode("utf-8")) > _MAX_IRC_LINE:
-                        text = text[: _MAX_IRC_LINE - 3] + "..."
+                    # Truncate by byte length to stay within IRC limits
+                    # while avoiding splitting multi-byte characters.
+                    encoded = text.encode("utf-8")
+                    if len(encoded) > _MAX_IRC_LINE:
+                        text = encoded[: _MAX_IRC_LINE - 3].decode("utf-8", errors="ignore") + "..."
 
                     try:
                         connection.privmsg(target_irc_ch, text)

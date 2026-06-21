@@ -146,6 +146,28 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)",
     )
+    serve.add_argument(
+        "--irc",
+        metavar="HOST:PORT",
+        default=None,
+        help="Enable IrcFrontend connecting to HOST:PORT (e.g. irc.example.com:6667)",
+    )
+    serve.add_argument(
+        "--irc-nick",
+        default="piazza-bot",
+        help="IRC bot nickname (default: piazza-bot)",
+    )
+    serve.add_argument(
+        "--irc-channels",
+        nargs="*",
+        default=None,
+        help="Piazza channels to bridge to IRC (auto-mapped to #<name>)",
+    )
+    serve.add_argument(
+        "--irc-ssl",
+        action="store_true",
+        help="Use SSL/TLS for IRC connection",
+    )
 
     # ── client ────────────────────────────────────────────────────
     client = sub.add_parser("client", help="Interact with a remote piazza server")
@@ -261,6 +283,34 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         actual_host, actual_port = http_frontend.address
         logger.info("HttpFrontend: http://%s:%d", actual_host, actual_port)
 
+    # Start IrcFrontend if requested
+    irc_frontend = None
+    if args.irc:
+        from piazza.frontends.irc import IrcFrontend
+
+        irc_host, irc_port = _parse_host_port(args.irc)
+        irc_frontend = IrcFrontend(
+            irc_host=irc_host,
+            irc_port=irc_port,
+            nickname=args.irc_nick,
+            channels=args.irc_channels or [],
+            use_ssl=args.irc_ssl,
+        )
+        irc_frontend.attach(bus)
+        irc_thread = threading.Thread(
+            target=irc_frontend.serve_forever,
+            name="piazza-irc-frontend",
+            daemon=True,
+        )
+        irc_thread.start()
+        logger.info(
+            "IrcFrontend: %s:%d as %s, bridging %s",
+            irc_host,
+            irc_port,
+            args.irc_nick,
+            args.irc_channels or "(no channels)",
+        )
+
     # Start AdminServer
     info = bus.start_admin(
         host="0.0.0.0" if args.remote else "127.0.0.1",
@@ -287,6 +337,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     stop.wait()
     logger.info("Shutting down...")
+    if irc_frontend:
+        irc_frontend.shutdown()
     if http_frontend:
         http_frontend.shutdown()
     bus.close()
