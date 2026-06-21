@@ -1,19 +1,34 @@
 # API Reference
 
-Auto-generated API documentation from source code docstrings.
-
 ## Core
 
-- [Bus](bus.md) — message routing and pub/sub
-- [PiazzaClient](client.md) — stateful agent SDK
-- [PiazzaServer](server.md) — server orchestrator
-- [Types](types.md) — `Message` dataclass
+::: piazza.Message
+::: piazza.Bus
+::: piazza.SQLiteBus
 
-## Storage
+## Protocols
 
-- [Backends](backends.md) — `SQLiteBackend`, `MemoryBackend`
+::: piazza.Backend
+::: piazza.Serializer
+::: piazza.MessageBus
 
-## Network
+## Backends
 
-- [Frontends](frontends.md) — `HttpFrontend`, `IrcFrontend`
-- [Transport](transport.md) — `LocalTransport`, `HttpTransport`
+::: piazza.SQLiteBackend
+::: piazza.MemoryBackend
+::: piazza.JSONSerializer
+
+## Admin
+
+::: piazza.admin.AdminServer
+::: piazza.admin.AdminInfo
+
+## Deprecated Aliases
+
+The following names are deprecated and will be removed in a future version:
+
+| Deprecated Name   | Replacement      |
+| ----------------- | ---------------- |
+| `StorageBackend`  | `Backend`        |
+| `SQLiteStorage`   | `SQLiteBackend`  |
+| `MemoryStorage`   | `MemoryBackend`  |

@@ -1,13 +1,15 @@
-# Piazza
+# piazza
 
 **Agent messaging hub for multi-agent collaboration.**
 
-Piazza provides a lightweight, zero-dependency message bus for multi-agent systems. Agents communicate through channels using a simple publish/subscribe model, with pluggable backends for storage and frontends for network access.
+## Overview
 
-## Key Features
+piazza is a lightweight, zero-dependency message bus for multi-agent systems. Agents communicate through channels using a simple publish/subscribe model, with pluggable backends for storage and frontends for network access.
+
+## Features
 
 - **Zero runtime dependencies** — pure Python stdlib
-- **Three-layer architecture** — Backend (storage) ↔ Bus ↔ Frontend (access protocol)
+- **Three-layer architecture** — Backend (storage) ↔ Bus (routing) ↔ Frontend (access protocol)
 - **Multiple backends** — SQLite (persistent) and Memory (ephemeral)
 - **Remote transport** — HTTP REST API + SSE push notifications
 - **IRC frontend** — bridge agent communication to IRC channels
@@ -20,14 +22,11 @@ Piazza provides a lightweight, zero-dependency message bus for multi-agent syste
 ```python
 from piazza import SQLiteBus, PiazzaClient
 
-# Start a bus
 bus = SQLiteBus("piazza.db")
 
-# Connect an agent
 client = PiazzaClient(bus, "my-agent")
 client.channel_send("tasks", "hello world")
 
-# Read messages
 msgs = client.channel_poll("tasks")
 print(msgs[0].payload)  # "hello world"
 
@@ -40,7 +39,7 @@ bus.close()
 ```
 Agent ←→ PiazzaClient ←→ Transport ←→ Bus ←→ Backend
                               ↑
-                          HttpFrontend / IrcFrontend
+                        HttpFrontend / IrcFrontend
                               ↑
                         Remote Agents
 ```
@@ -51,4 +50,4 @@ Agent ←→ PiazzaClient ←→ Transport ←→ Bus ←→ Backend
 pip install piazza
 ```
 
-See the [Installation Guide](usage/installation.md) for details.
+See the [Installation Guide](usage/installation.md) for details, or jump to the [Quick Start](usage/quickstart.md).

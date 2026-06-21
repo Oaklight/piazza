@@ -1,70 +1,74 @@
-site_name: Piazza
+site_name: piazza
 site_description: Agent messaging hub for multi-agent collaboration
 site_author: Peng Ding
 site_url: https://piazza.readthedocs.io/en/latest
 repo_name: Oaklight/piazza
 repo_url: https://github.com/Oaklight/piazza
-copyright: Copyright &copy; 2025 Peng Ding
+copyright: Copyright &copy; 2026 Peng Ding
 
 theme:
   name: material
   custom_dir: overrides
   language: en
   palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
-    - media: "(prefers-color-scheme)"
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-auto
-        name: Switch to light mode
   features:
     - navigation.tabs
     - navigation.sections
+    - navigation.expand
     - navigation.top
     - navigation.indexes
-    - navigation.footer
-    - navigation.path
-    - navigation.tracking
-    - navigation.instant
-    - navigation.instant.prefetch
-    - navigation.instant.progress
-    - header.autohide
-    - toc.follow
     - search.highlight
     - search.share
     - search.suggest
     - content.code.copy
-    - content.code.annotate
-    - content.code.select
-    - content.tabs.link
-    - content.tooltips
+    - content.action.edit
 
 plugins:
-  - search:
-      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - search
   - mkdocstrings:
       handlers:
         python:
-          paths: [src]
           options:
             docstring_style: google
-            show_source: true
+            show_source: false
             show_root_heading: true
             members_order: source
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Home:
+          - index.md
+        Get Started:
+          - usage/installation.md
+          - usage/quickstart.md
+        Architecture:
+          - architecture/overview.md
+        Guides:
+          - usage/index.md
+          - usage/cli.md
+          - usage/admin.md
+          - usage/remote.md
+          - usage/irc.md
+        API Reference:
+          - api/index.md
+        Examples:
+          - examples/index.md
+        Changelog:
+          - changelog.md
 
 markdown_extensions:
   - admonition
@@ -76,14 +80,9 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
-      line_spans: __span
-      pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
   - pymdownx.tabbed:
       alternate_style: true
-  - attr_list
-  - md_in_html
   - toc:
       permalink: true
 
@@ -109,6 +108,7 @@ nav:
   - Architecture:
       - Overview: architecture/overview.md
   - Guides:
+      - Usage Overview: usage/index.md
       - CLI Usage: usage/cli.md
       - Admin Panel: usage/admin.md
       - Remote Transport: usage/remote.md
@@ -122,4 +122,6 @@ nav:
       - Frontends: api/frontends.md
       - Transport: api/transport.md
       - Types: api/types.md
+  - Examples:
+      - examples/index.md
   - Changelog: changelog.md

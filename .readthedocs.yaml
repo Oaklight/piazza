@@ -9,16 +9,14 @@ build:
     python: "3.11"
   jobs:
     pre_build:
-      # Download the source code from the main repository for mkdocstrings
-      - git clone https://github.com/Oaklight/piazza.git src_repo
-      - mkdir -p src
-      - cp -r src_repo/src/piazza src/
-      - rm -rf src_repo
+      # Install the package for mkdocstrings to resolve API references
+      - pip install git+https://github.com/Oaklight/piazza.git
     install:
       - pip install -r requirements.txt
     build:
       html:
         - zensical build
+        - python -m llmstxt_standalone build -c mkdocs.yml -s site -v
     post_build:
       - mkdir -p $READTHEDOCS_OUTPUT/html/
       - cp --recursive site/* $READTHEDOCS_OUTPUT/html/
