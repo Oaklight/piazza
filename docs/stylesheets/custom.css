@@ -1,0 +1,21 @@
+/* Burgundy + Gold theme override
+ * Material's built-in "pink" is #E91E63, too bright for a classical feel.
+ * Override to burgundy (#880E4F) for primary, gold (#FFD54F) for accent.
+ */
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #880E4F;
+  --md-primary-fg-color--light: #AD1457;
+  --md-primary-fg-color--dark: #6A0038;
+  --md-accent-fg-color: #FFB300;
+  --md-accent-fg-color--transparent: rgba(255, 179, 0, 0.1);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #AD1457;
+  --md-primary-fg-color--light: #C2185B;
+  --md-primary-fg-color--dark: #880E4F;
+  --md-accent-fg-color: #FFD54F;
+  --md-accent-fg-color--transparent: rgba(255, 213, 79, 0.1);
+}

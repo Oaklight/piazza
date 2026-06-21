@@ -1,4 +1,4 @@
-site_name: piazza
+site_name: Piazza
 site_description: Agent messaging hub for multi-agent collaboration
 site_author: Peng Ding
 site_url: https://piazza.readthedocs.io/en/latest
@@ -12,40 +12,64 @@ theme:
   language: en
   palette:
     - media: "(prefers-color-scheme)"
+      primary: pink
+      accent: amber
       toggle:
         icon: material/brightness-auto
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
+      primary: pink
+      accent: amber
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
+      primary: pink
+      accent: amber
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
   features:
     - navigation.tabs
     - navigation.sections
-    - navigation.expand
     - navigation.top
     - navigation.indexes
+    - navigation.footer
+    - navigation.path
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.prune
+    - header.autohide
+    - toc.follow
     - search.highlight
     - search.share
     - search.suggest
     - content.code.copy
-    - content.action.edit
+    - content.code.annotate
+    - content.code.select
+    - content.tabs.link
+    - content.tooltips
+    - content.footnote.tooltips
 
 plugins:
-  - search
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             docstring_style: google
-            show_source: false
+            show_source: true
             show_root_heading: true
+            show_root_toc_entry: false
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
             members_order: source
   - llmstxt:
       full_output: llms-full.txt
@@ -80,9 +104,14 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
+  - pymdownx.snippets
   - pymdownx.tabbed:
       alternate_style: true
+  - attr_list
+  - md_in_html
   - toc:
       permalink: true
 
@@ -99,6 +128,9 @@ extra:
     - name: 中文
       link: /zh-cn/latest/
       lang: zh
+
+extra_css:
+  - stylesheets/custom.css
 
 nav:
   - Home: index.md
