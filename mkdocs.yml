@@ -1,0 +1,125 @@
+site_name: Piazza
+site_description: Agent messaging hub for multi-agent collaboration
+site_author: Peng Ding
+site_url: https://piazza.readthedocs.io/en/latest
+repo_name: Oaklight/piazza
+repo_url: https://github.com/Oaklight/piazza
+copyright: Copyright &copy; 2025 Peng Ding
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+    - media: "(prefers-color-scheme)"
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - navigation.path
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - header.autohide
+    - toc.follow
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.code.select
+    - content.tabs.link
+    - content.tooltips
+
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Oaklight/piazza
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/piazza/
+  alternate:
+    - name: English
+      link: /en/latest/
+      lang: en
+    - name: 中文
+      link: /zh-cn/latest/
+      lang: zh
+
+nav:
+  - Home: index.md
+  - Get Started:
+      - Installation: usage/installation.md
+      - Quick Start: usage/quickstart.md
+  - Architecture:
+      - Overview: architecture/overview.md
+  - Guides:
+      - CLI Usage: usage/cli.md
+      - Admin Panel: usage/admin.md
+      - Remote Transport: usage/remote.md
+      - IRC Frontend: usage/irc.md
+  - API Reference:
+      - Overview: api/index.md
+      - Bus: api/bus.md
+      - PiazzaClient: api/client.md
+      - PiazzaServer: api/server.md
+      - Backends: api/backends.md
+      - Frontends: api/frontends.md
+      - Transport: api/transport.md
+      - Types: api/types.md
+  - Changelog: changelog.md
