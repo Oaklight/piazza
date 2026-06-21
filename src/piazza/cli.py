@@ -288,6 +288,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     if args.irc:
         from piazza.frontends.irc import IrcFrontend
 
+        if ":" not in args.irc:
+            logger.error("--irc requires HOST:PORT format (e.g. irc.example.com:6667)")
+            sys.exit(1)
         irc_host, irc_port = _parse_host_port(args.irc)
         irc_frontend = IrcFrontend(
             irc_host=irc_host,
