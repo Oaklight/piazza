@@ -1,3 +1,7 @@
+---
+hide:
+  - navigation
+---
 # piazza
 
 **面向多智能体协作的消息中枢。**
