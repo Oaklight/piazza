@@ -9,8 +9,11 @@ build:
     python: "3.11"
   jobs:
     pre_build:
-      # Install the package for mkdocstrings to resolve API references
-      - pip install git+https://github.com/Oaklight/piazza.git
+      # Download the source code from the main repository for mkdocstrings
+      - git clone https://github.com/Oaklight/piazza.git src_repo
+      - mkdir -p src
+      - cp -r src_repo/src/piazza src/
+      - rm -rf src_repo
     install:
       - pip install -r requirements.txt
     build:
