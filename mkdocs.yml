@@ -1,0 +1,127 @@
+site_name: piazza
+site_description: 面向多智能体协作的消息中枢
+site_author: Peng Ding
+site_url: https://piazza.readthedocs.io/zh-cn/latest
+repo_name: Oaklight/piazza
+repo_url: https://github.com/Oaklight/piazza
+copyright: Copyright &copy; 2026 Peng Ding
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: zh
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: 切换到浅色模式
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: 跟随系统设置
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            members_order: source
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        首页:
+          - index.md
+        快速开始:
+          - usage/installation.md
+          - usage/quickstart.md
+        架构:
+          - architecture/overview.md
+        使用指南:
+          - usage/index.md
+          - usage/cli.md
+          - usage/admin.md
+          - usage/remote.md
+          - usage/irc.md
+        API 参考:
+          - api/index.md
+        示例:
+          - examples/index.md
+        更新日志:
+          - changelog.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Oaklight/piazza
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/piazza/
+  alternate:
+    - name: English
+      link: /en/latest/
+      lang: en
+    - name: 中文
+      link: /zh-cn/latest/
+      lang: zh
+
+nav:
+  - 首页: index.md
+  - 快速开始:
+      - 安装: usage/installation.md
+      - 快速入门: usage/quickstart.md
+  - 架构:
+      - 概览: architecture/overview.md
+  - 使用指南:
+      - 概述: usage/index.md
+      - CLI 使用: usage/cli.md
+      - 管理面板: usage/admin.md
+      - 远程传输: usage/remote.md
+      - IRC 前端: usage/irc.md
+  - API 参考:
+      - 概览: api/index.md
+      - Bus: api/bus.md
+      - PiazzaClient: api/client.md
+      - PiazzaServer: api/server.md
+      - 后端: api/backends.md
+      - 前端: api/frontends.md
+      - 传输: api/transport.md
+      - 类型: api/types.md
+  - 示例:
+      - examples/index.md
+  - 更新日志: changelog.md
