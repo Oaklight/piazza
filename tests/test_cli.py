@@ -71,6 +71,29 @@ class TestParseArgsServe:
         with pytest.raises(SystemExit):
             parse_args(["serve", "--log-level", "TRACE"])
 
+    def test_serve_irc(self):
+        args = parse_args(["serve", "--irc", "irc.example.com:6667"])
+        assert args.irc == "irc.example.com:6667"
+
+    def test_serve_irc_nick(self):
+        args = parse_args(["serve", "--irc", "host:6667", "--irc-nick", "mybot"])
+        assert args.irc_nick == "mybot"
+
+    def test_serve_irc_channels(self):
+        args = parse_args(["serve", "--irc", "host:6667", "--irc-channels", "tasks", "sync"])
+        assert args.irc_channels == ["tasks", "sync"]
+
+    def test_serve_irc_ssl(self):
+        args = parse_args(["serve", "--irc", "host:6697", "--irc-ssl"])
+        assert args.irc_ssl is True
+
+    def test_serve_irc_defaults(self):
+        args = parse_args(["serve"])
+        assert args.irc is None
+        assert args.irc_nick == "piazza-bot"
+        assert args.irc_channels is None
+        assert args.irc_ssl is False
+
 
 class TestParseArgsClient:
     """Tests for client subcommand argument parsing."""

@@ -270,6 +270,27 @@ class TestPiazzaToIrc:
         assert ("#tasks", "agent-a: task msg") in call_args
         assert ("#sync", "agent-b: sync msg") in call_args
 
+    def test_reconnect_clears_old_subscriptions(self) -> None:
+        """Calling _setup_bus_subscriptions again clears old subs first."""
+        fe = IrcFrontend(channels=["tasks"])
+        bus = Bus(backend=MemoryBackend())
+        fe.attach(bus)
+
+        conn1 = MagicMock()
+        fe._setup_bus_subscriptions(conn1)
+        assert len(fe._sub_ids) == 1
+
+        # Simulate reconnect: setup called again with new connection
+        conn2 = MagicMock()
+        fe._setup_bus_subscriptions(conn2)
+        # Should still be 1, not 2 (old sub cleared)
+        assert len(fe._sub_ids) == 1
+
+        # Publish should only forward once (to conn2, not conn1)
+        bus.publish(channel="tasks", sender="agent-a", msg_type="text", payload="msg")
+        conn1.privmsg.assert_not_called()
+        conn2.privmsg.assert_called_once_with("#tasks", "agent-a: msg")
+
     def test_shutdown_unsubscribes_from_bus(self) -> None:
         """shutdown() removes all bus subscriptions."""
         fe = IrcFrontend(channels=["tasks", "sync"])

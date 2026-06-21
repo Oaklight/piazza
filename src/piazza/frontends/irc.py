@@ -281,12 +281,19 @@ class IrcFrontend:
         """Subscribe to piazza channels and forward messages to IRC.
 
         Called after the bot connects to IRC and joins channels.
+        Clears any existing subscriptions first to prevent duplicates
+        on reconnect (on_welcome fires again after auto-reconnect).
 
         Args:
             connection: The IRC server connection object.
         """
         if self._bus is None:
             return
+
+        # Clear stale subscriptions from previous connection
+        for old_sub_id in self._sub_ids:
+            self._bus.unsubscribe(old_sub_id)
+        self._sub_ids.clear()
 
         for piazza_ch, irc_ch in self._piazza_to_irc.items():
 
