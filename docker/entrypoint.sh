@@ -4,6 +4,12 @@
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
+# Reject UID/GID 0 — running as root defeats the non-root setup.
+if [ "$PUID" -lt 1 ] 2>/dev/null || [ "$PGID" -lt 1 ] 2>/dev/null; then
+	echo "ERROR: PUID and PGID must be >= 1 (got PUID=$PUID, PGID=$PGID)" >&2
+	exit 1
+fi
+
 # Modify the existing user and group to match PUID and PGID
 if [ "$(id -u appuser)" != "$PUID" ] || [ "$(id -g appuser)" != "$PGID" ]; then
 	sed -i "s/^appuser:x:[0-9]*:[0-9]*:/appuser:x:$PUID:$PGID:/" /etc/passwd

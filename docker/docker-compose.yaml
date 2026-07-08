@@ -16,4 +16,10 @@ services:
     environment:
       - PUID=${PUID:-1000} # Match your host user's UID
       - PGID=${PGID:-1000} # Match your host user's GID
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8742/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped

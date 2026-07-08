@@ -99,7 +99,7 @@ build-docker:
 		echo "Using PyPI mirror: $(PYPI_MIRROR)"; \
 		BUILD_ARGS="$$BUILD_ARGS --build-arg PYPI_MIRROR=$(PYPI_MIRROR)"; \
 	fi; \
-	cd docker && docker build -f Dockerfile $$BUILD_ARGS -t $(DOCKER_IMAGE):$(V) -t $(DOCKER_IMAGE):latest ..
+	docker build -f docker/Dockerfile $$BUILD_ARGS -t $(DOCKER_IMAGE):$(V) -t $(DOCKER_IMAGE):latest .
 	@echo "Docker image built successfully."
 
 push-docker:

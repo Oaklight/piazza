@@ -23,33 +23,24 @@ RUN apk add --no-cache su-exec
 
 # Copy only the dist/ directory for local wheels (never copy the full tree —
 # even with .dockerignore, a broad COPY risks leaking secrets into layers).
-# The trailing slash on dist/ + a wildcard ensures COPY is a no-op when empty.
-RUN mkdir -p /tmp/dist/
 COPY dist/ /tmp/dist/
 
 # Install piazza: local wheel > specific version > latest from PyPI
-# Then remove pip/setuptools to save space.
-RUN if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
+#
+# PIP_ARGS is built once to avoid repeating the PYPI_MIRROR conditional.
+# After install, pip and setuptools are removed — this is a locked-down
+# production image; no further pip installs are expected inside the container.
+RUN PIP_ARGS="--no-cache-dir"; \
+    [ -n "$PYPI_MIRROR" ] && PIP_ARGS="$PIP_ARGS -i $PYPI_MIRROR"; \
+    if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
         echo "Installing from local wheel: $LOCAL_WHEEL"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}"; \
-        else \
-            pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}"; \
-        fi; \
+        pip install $PIP_ARGS "/tmp/dist/${LOCAL_WHEEL}"; \
     elif [ -n "$PACKAGE_VERSION" ]; then \
         echo "Installing piazza version: $PACKAGE_VERSION"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "piazza==$PACKAGE_VERSION"; \
-        else \
-            pip install --no-cache-dir "piazza==$PACKAGE_VERSION"; \
-        fi; \
+        pip install $PIP_ARGS "piazza==$PACKAGE_VERSION"; \
     else \
         echo "Installing latest piazza from PyPI"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "piazza"; \
-        else \
-            pip install --no-cache-dir "piazza"; \
-        fi; \
+        pip install $PIP_ARGS "piazza"; \
     fi && \
     pip uninstall -y pip setuptools 2>/dev/null || true && \
     rm -rf /tmp/dist/

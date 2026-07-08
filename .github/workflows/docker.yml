@@ -60,17 +60,17 @@ jobs:
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
           echo "Waiting for piazza==$VERSION on PyPI..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 45); do
             CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
               "https://pypi.org/pypi/piazza/$VERSION/json" || true)
             if [ "$CODE" = "200" ]; then
               echo "✅ piazza==$VERSION found on PyPI (attempt $i)"
               exit 0
             fi
-            echo "  Attempt $i/30: not yet available (HTTP $CODE), waiting 20s..."
+            echo "  Attempt $i/45: not yet available (HTTP $CODE), waiting 20s..."
             sleep 20
           done
-          echo "❌ piazza==$VERSION not found on PyPI after 10 minutes"
+          echo "❌ piazza==$VERSION not found on PyPI after 15 minutes"
           exit 1
 
       - name: Log in to Docker Hub
