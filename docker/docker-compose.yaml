@@ -1,0 +1,19 @@
+# Piazza — agent messaging hub
+#
+# Quick start:
+#   docker compose up -d
+#
+# The SQLite database is stored under ./data/ on the host.
+
+services:
+  piazza:
+    image: oaklight/piazza
+    ports:
+      - "8741:8741" # Admin panel
+      - "8742:8742" # HTTP API (REST + SSE)
+    volumes:
+      - ./data:/data # Persistent SQLite storage
+    environment:
+      - PUID=${PUID:-1000} # Match your host user's UID
+      - PGID=${PGID:-1000} # Match your host user's GID
+    restart: unless-stopped

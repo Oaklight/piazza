@@ -1,0 +1,95 @@
+name: Docker
+
+on:
+  # Called by the Release workflow after the package is published to PyPI.
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Version to build (e.g. 0.1.0)'
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+  # Manual trigger for ad-hoc rebuilds of an already-published version.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version to build (e.g. 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version tag
+        id: meta
+        run: |
+          VERSION="${{ inputs.tag }}"
+          # Normalize: strip an optional leading "v" so callers may pass either form.
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::No version provided via inputs.tag"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Ensure build context has dist/
+        # The Dockerfile's `COPY dist/ /tmp/dist/` requires the source dir to
+        # exist in the build context. In CI we install from PyPI (no local
+        # wheel), so create an empty dist/ to make the COPY a harmless no-op.
+        run: mkdir -p dist
+
+      - name: Wait for PyPI availability
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          echo "Waiting for piazza==$VERSION on PyPI..."
+          for i in $(seq 1 30); do
+            CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
+              "https://pypi.org/pypi/piazza/$VERSION/json" || true)
+            if [ "$CODE" = "200" ]; then
+              echo "✅ piazza==$VERSION found on PyPI (attempt $i)"
+              exit 0
+            fi
+            echo "  Attempt $i/30: not yet available (HTTP $CODE), waiting 20s..."
+            sleep 20
+          done
+          echo "❌ piazza==$VERSION not found on PyPI after 10 minutes"
+          exit 1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            PACKAGE_VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            oaklight/piazza:${{ steps.meta.outputs.version }}
+            oaklight/piazza:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
