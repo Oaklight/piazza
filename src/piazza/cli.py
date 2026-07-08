@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+from typing import Any
 
 from piazza import SQLiteBus, __version__
 
@@ -133,7 +134,12 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--token",
         default=None,
-        help="Auth token for admin panel (auto-generated if --remote)",
+        help="Admin password for admin panel (auto-generated if --remote)",
+    )
+    serve.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Disable API token auth and admin auth (for local dev)",
     )
     serve.add_argument(
         "--no-ui",
@@ -260,13 +266,27 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     bus = SQLiteBus(args.db)
     logger.info("Bus started with database: %s", args.db)
 
+    # Set up token store (unless --no-auth)
+    token_store = None
+    if not args.no_auth:
+        from piazza.token_store import TokenStore
+
+        token_store = TokenStore(args.db)
+        token_count = len(token_store.list_tokens())
+        if token_count > 0:
+            logger.info("Token auth enabled (%d token(s) configured)", token_count)
+        else:
+            logger.info(
+                "Token auth ready (no tokens configured yet — API open until first token is created)"
+            )
+
     # Start HttpFrontend if requested
     http_frontend = None
     if args.http:
         from piazza.frontends.http import HttpFrontend
 
         host, port = _parse_host_port(args.http)
-        http_frontend = HttpFrontend(host=host, port=port)
+        http_frontend = HttpFrontend(host=host, port=port, token_store=token_store)
         http_frontend.attach(bus)
         http_thread = threading.Thread(
             target=http_frontend.serve_forever,
@@ -315,16 +335,20 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         )
 
     # Start AdminServer
-    info = bus.start_admin(
-        host="0.0.0.0" if args.remote else "127.0.0.1",
-        port=args.admin_port,
-        serve_ui=not args.no_ui,
-        remote=args.remote,
-        auth_token=args.token,
-    )
+    admin_kwargs: dict[str, Any] = {
+        "host": "0.0.0.0" if args.remote else "127.0.0.1",
+        "port": args.admin_port,
+        "serve_ui": not args.no_ui,
+        "remote": args.remote if not args.no_auth else False,
+        "token_store": token_store,
+    }
+    if args.token:
+        admin_kwargs["auth_password"] = args.token
+
+    info = bus.start_admin(**admin_kwargs)
     logger.info("Admin panel: %s", info.url)
-    if info.token:
-        logger.info("Auth token: %s", _redact_token(info.token))
+    if info.password:
+        logger.info("Admin password: %s", _redact_token(info.password))
 
     # Block until SIGINT/SIGTERM.
     # Signal handler only sets an Event — all cleanup runs in the main

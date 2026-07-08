@@ -11,11 +11,12 @@ from dataclasses import dataclass
 from http.server import HTTPServer
 from typing import TYPE_CHECKING
 
-from .auth import TokenAuth
+from .auth import SessionAuth
 from .handlers import AdminRequestHandler
 
 if TYPE_CHECKING:
     from piazza.bus import Bus
+    from piazza.token_store import TokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +29,13 @@ class AdminInfo:
         host: The host address the server is bound to.
         port: The port number the server is listening on.
         url: The full URL to access the admin panel.
-        token: The authentication token (if auth is enabled).
+        password: The admin password (if auth is enabled).
     """
 
     host: str
     port: int
     url: str
-    token: str | None
+    password: str | None
 
 
 class AdminServer:
@@ -49,7 +50,8 @@ class AdminServer:
         port: Port number to listen on. Defaults to 8741.
         serve_ui: Whether to serve the admin UI at root path.
         remote: Whether to allow remote connections (binds to 0.0.0.0).
-        auth_token: Optional auth token. Auto-generated if remote=True.
+        auth_password: Optional admin password. Auto-generated if remote=True.
+        token_store: Optional TokenStore for agent token management.
 
     Example:
         >>> from piazza import Bus
@@ -67,6 +69,9 @@ class AdminServer:
         port: int = 8741,
         serve_ui: bool = True,
         remote: bool = False,
+        auth_password: str | None = None,
+        token_store: "TokenStore | None" = None,
+        # Backward compat: accept auth_token as alias for auth_password
         auth_token: str | None = None,
     ) -> None:
         self._bus = bus
@@ -74,11 +79,14 @@ class AdminServer:
         self._port = port
         self._serve_ui = serve_ui
         self._remote = remote
+        self._token_store = token_store
 
-        if auth_token is not None:
-            self._auth: TokenAuth | None = TokenAuth(auth_token)
+        # auth_token is the legacy name; auth_password takes precedence
+        password = auth_password or auth_token
+        if password is not None:
+            self._auth: SessionAuth | None = SessionAuth(password)
         elif remote:
-            self._auth = TokenAuth()
+            self._auth = SessionAuth()
         else:
             self._auth = None
 
@@ -90,7 +98,7 @@ class AdminServer:
         """Start the server in a background thread.
 
         Returns:
-            AdminInfo containing server details including URL and token.
+            AdminInfo containing server details including URL and password.
 
         Raises:
             RuntimeError: If the server is already running.
@@ -109,6 +117,7 @@ class AdminServer:
                 "bus": self._bus,
                 "auth": self._auth,
                 "serve_ui": self._serve_ui,
+                "token_store": self._token_store,
             },
         )
 
@@ -126,12 +135,12 @@ class AdminServer:
             host=self._host,
             port=self._port,
             url=url,
-            token=self._auth.token if self._auth else None,
+            password=self._auth.password if self._auth else None,
         )
 
         logger.info(f"Admin server started at {url}")
         if self._auth:
-            logger.info(f"Authentication token: {self._auth.token}")
+            logger.info(f"Admin password: {self._auth.password}")
 
         return info
 
@@ -170,7 +179,7 @@ class AdminServer:
             host=self._host,
             port=self._port,
             url=url,
-            token=self._auth.token if self._auth else None,
+            password=self._auth.password if self._auth else None,
         )
 
     @staticmethod

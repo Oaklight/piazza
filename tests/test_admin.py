@@ -107,30 +107,45 @@ class TestBackendExtensions:
 # ============== Auth Tests ==============
 
 
-class TestTokenAuth:
+class TestSessionAuth:
     def test_auto_generate(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth()
+        assert len(auth.password) == 32  # 16 bytes hex
+
+    def test_custom_password(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("my-secret")
+        assert auth.password == "my-secret"
+
+    def test_check_password_correct(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("test-password")
+        assert auth.check_password("test-password") is True
+
+    def test_check_password_wrong(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("test-password")
+        assert auth.check_password("wrong-password") is False
+
+    def test_session_create_validate(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("test-password")
+        token = auth.create_session()
+        assert auth.validate_session(token) is True
+        assert auth.validate_session("wrong") is False
+
+    def test_backward_compat_alias(self):
         from piazza.admin.auth import TokenAuth
 
-        auth = TokenAuth()
-        assert len(auth.token) == 32  # 16 bytes hex
-
-    def test_custom_token(self):
-        from piazza.admin.auth import TokenAuth
-
+        # TokenAuth is an alias for SessionAuth
         auth = TokenAuth("my-secret")
-        assert auth.token == "my-secret"
-
-    def test_verify_correct(self):
-        from piazza.admin.auth import TokenAuth
-
-        auth = TokenAuth("test-token")
-        assert auth.verify("test-token") is True
-
-    def test_verify_wrong(self):
-        from piazza.admin.auth import TokenAuth
-
-        auth = TokenAuth("test-token")
-        assert auth.verify("wrong-token") is False
+        assert auth.password == "my-secret"
 
 
 # ============== Admin Server Tests ==============
@@ -160,7 +175,7 @@ class TestAdminServer:
         info = server.start()
         assert info.host == "127.0.0.1"
         assert info.port > 0
-        assert info.token is None
+        assert info.password is None
         server.stop()
 
     def test_double_start_raises(self, bus):
@@ -172,13 +187,13 @@ class TestAdminServer:
             server.start()
         server.stop()
 
-    def test_remote_auto_generates_token(self, bus):
+    def test_remote_auto_generates_password(self, bus):
         from piazza.admin import AdminServer
 
         server = AdminServer(bus, remote=True)
         info = server.start()
-        assert info.token is not None
-        assert len(info.token) == 32
+        assert info.password is not None
+        assert len(info.password) == 32
         server.stop()
 
     def test_bus_start_admin(self, bus):
@@ -343,9 +358,9 @@ class TestAdminAPI:
 
     def test_auth_required(self):
         bus = SQLiteBus(":memory:")
-        info = bus.start_admin(port=0, auth_token="secret123")
+        info = bus.start_admin(port=0, auth_password="secret123")
         try:
-            # Without token should fail
+            # Without session cookie, API should fail
             try:
                 req = urllib.request.Request(info.url + "/api/stats")
                 urllib.request.urlopen(req, timeout=5)
@@ -353,11 +368,28 @@ class TestAdminAPI:
             except urllib.error.HTTPError as e:
                 assert e.code == 401
 
-            # With correct token should work
+            # Login to get session cookie
+            login_data = json.dumps({"password": "secret123"}).encode()
+            login_req = urllib.request.Request(
+                info.url + "/api/login",
+                data=login_data,
+                headers={"Content-Type": "application/json"},
+            )
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+            with opener.open(login_req, timeout=5) as resp:
+                result = json.loads(resp.read())
+                assert result["ok"] is True
+
+            # With session cookie should work
             req = urllib.request.Request(info.url + "/api/stats")
-            req.add_header("Authorization", "Bearer secret123")
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with opener.open(req, timeout=5) as resp:
                 data = json.loads(resp.read())
                 assert "total_messages" in data
+
+            # Root page (HTML) should be accessible without auth
+            req = urllib.request.Request(info.url + "/")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                content = resp.read().decode()
+                assert "Piazza" in content
         finally:
             bus.close()

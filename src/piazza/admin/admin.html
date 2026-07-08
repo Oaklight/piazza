@@ -426,6 +426,54 @@ tr:hover { background: var(--accent-light); }
 .toast-success { background: var(--success); color: #fff; }
 .toast-error { background: var(--error); color: #fff; }
 .toast-info { background: var(--accent); color: #fff; }
+
+/* ============== Login Overlay ============== */
+.login-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); z-index: 2000;
+    display: flex; align-items: center; justify-content: center;
+}
+.login-overlay.hidden { display: none; }
+.login-card {
+    background: var(--bg-secondary); border-radius: var(--radius-lg);
+    padding: 32px; width: 360px; box-shadow: var(--shadow-lg);
+}
+.login-card h2 { margin-bottom: 20px; font-size: 1.25rem; }
+.login-card input {
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font-size: 0.9rem; margin-bottom: 12px;
+    outline: none; background: var(--bg-primary);
+}
+.login-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-light); }
+.login-error { color: var(--error); font-size: 0.8rem; margin-bottom: 8px; min-height: 1.2em; }
+
+/* ============== Modal ============== */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.4); z-index: 1500;
+    display: flex; align-items: center; justify-content: center;
+}
+.modal-overlay.hidden { display: none; }
+.modal-card {
+    background: var(--bg-secondary); border-radius: var(--radius-lg);
+    padding: 28px; width: 440px; box-shadow: var(--shadow-lg);
+}
+.modal-card h3 { margin-bottom: 16px; }
+
+/* ============== Token Reveal ============== */
+.token-reveal {
+    background: #FFF8E1; border: 1px solid #F9A825; border-radius: var(--radius-md);
+    padding: 16px; margin: 12px 0;
+}
+.token-reveal-label { font-size: 0.8rem; font-weight: 600; color: #E65100; margin-bottom: 6px; }
+.token-reveal-value {
+    font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem;
+    word-break: break-all; background: #FFF3E0; padding: 8px; border-radius: 4px;
+    margin-bottom: 8px;
+}
+.btn-danger { background: var(--error); color: #fff; }
+.btn-danger:hover { background: #A33636; }
+.btn-sm-action { padding: 3px 8px; font-size: 0.7rem; margin: 0 2px; }
 @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes slideOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
 
@@ -462,6 +510,7 @@ tr:hover { background: var(--accent-light); }
             </svg>
             Refresh
         </button>
+        <button class="btn btn-secondary btn-sm" id="logoutBtn" onclick="doLogout()" style="display:none">Logout</button>
     </header>
 
     <!-- Tabs -->
@@ -470,6 +519,7 @@ tr:hover { background: var(--accent-light); }
         <button class="tab-btn" onclick="switchTab('channels')">Channels</button>
         <button class="tab-btn" onclick="switchTab('messages')">Messages</button>
         <button class="tab-btn" onclick="switchTab('subscriptions')">Subscriptions</button>
+        <button class="tab-btn" onclick="switchTab('tokens')">Tokens</button>
     </div>
 
     <!-- Dashboard Tab -->
@@ -587,6 +637,52 @@ tr:hover { background: var(--accent-light); }
             </table>
         </div>
     </div>
+
+    <!-- Tokens Tab -->
+    <div class="tab-content" id="tab-tokens">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <span style="font-size:0.875rem;color:var(--text-secondary)" id="tokenStatus"></span>
+            <button class="btn btn-primary btn-sm" onclick="showCreateTokenModal()">+ Create Token</button>
+        </div>
+        <div id="tokenRevealArea"></div>
+        <div class="table-container">
+            <table>
+                <thead><tr>
+                    <th>ID</th><th>Agent ID</th><th>Label</th><th>Prefix</th><th>Created</th><th>Last Used</th><th>Actions</th>
+                </tr></thead>
+                <tbody id="tokenList"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Login Overlay -->
+<div class="login-overlay hidden" id="loginOverlay">
+    <div class="login-card">
+        <h2>🔐 Piazza Admin</h2>
+        <div class="login-error" id="loginError"></div>
+        <input type="password" id="loginPassword" placeholder="Admin password" onkeydown="if(event.key==='Enter')doLogin()">
+        <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Login</button>
+    </div>
+</div>
+
+<!-- Create Token Modal -->
+<div class="modal-overlay hidden" id="createTokenModal">
+    <div class="modal-card">
+        <h3>Create Agent Token</h3>
+        <div class="form-group" style="margin-bottom:12px">
+            <label>Agent ID</label>
+            <input id="newTokenAgentId" type="text" placeholder="agent-alice (leave empty for supertoken)">
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+            <label>Label</label>
+            <input id="newTokenLabel" type="text" placeholder="Description">
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-secondary" onclick="hideCreateTokenModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitCreateToken()">Create</button>
+        </div>
+    </div>
 </div>
 
 <!-- Toast Container -->
@@ -597,28 +693,17 @@ tr:hover { background: var(--accent-light); }
 class PiazzaAPI {
     constructor() {
         this.baseUrl = window.location.origin;
-        this.token = localStorage.getItem('piazza_token') || null;
-    }
-
-    getHeaders() {
-        const headers = { 'Content-Type': 'application/json' };
-        if (this.token) headers['Authorization'] = 'Bearer ' + this.token;
-        return headers;
     }
 
     async request(path, options = {}) {
         try {
             const resp = await fetch(this.baseUrl + path, {
-                headers: this.getHeaders(),
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
                 ...options,
             });
             if (resp.status === 401) {
-                const token = prompt('Enter authentication token:');
-                if (token) {
-                    this.token = token;
-                    localStorage.setItem('piazza_token', token);
-                    return this.request(path, options);
-                }
+                showLoginOverlay();
                 throw new Error('Authentication required');
             }
             updateStatus(true);
@@ -629,6 +714,26 @@ class PiazzaAPI {
             }
             throw e;
         }
+    }
+
+    async login(password) {
+        const resp = await fetch(this.baseUrl + '/api/login', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+        });
+        return { ok: resp.ok, data: await resp.json() };
+    }
+
+    async logout() {
+        return fetch(this.baseUrl + '/api/logout', {
+            method: 'POST', credentials: 'same-origin',
+        });
+    }
+
+    async checkAuth() {
+        const resp = await fetch(this.baseUrl + '/api/auth-check', { credentials: 'same-origin' });
+        return resp.json();
     }
 
     async getStats() { return this.request('/api/stats'); }
@@ -646,6 +751,21 @@ class PiazzaAPI {
         return this.request('/api/messages', { method: 'POST', body: JSON.stringify(data) });
     }
     async getSubscriptions() { return this.request('/api/subscriptions'); }
+
+    // Token management
+    async listTokens() { return this.request('/api/tokens'); }
+    async createToken(agentId, label) {
+        return this.request('/api/tokens', {
+            method: 'POST',
+            body: JSON.stringify({ agent_id: agentId || null, label: label || '' }),
+        });
+    }
+    async deleteToken(id) {
+        return this.request('/api/tokens/' + id, { method: 'DELETE' });
+    }
+    async rotateToken(id) {
+        return this.request('/api/tokens/' + id + '/rotate', { method: 'POST' });
+    }
 }
 
 const api = new PiazzaAPI();
@@ -702,6 +822,7 @@ function refreshCurrentTab() {
             if (document.getElementById('msgAutoRefresh').checked) loadMessages();
             break;
         case 'subscriptions': loadSubscriptions(); break;
+        case 'tokens': loadTokens(); break;
     }
 }
 
@@ -1047,8 +1168,161 @@ function formatTime(isoStr) {
     } catch(e) { return isoStr; }
 }
 
+/* ============== Login / Logout ============== */
+function showLoginOverlay() {
+    document.getElementById('loginOverlay').classList.remove('hidden');
+    document.getElementById('loginError').textContent = '';
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('loginPassword').focus();
+    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+}
+
+function hideLoginOverlay() {
+    document.getElementById('loginOverlay').classList.add('hidden');
+}
+
+async function doLogin() {
+    const pw = document.getElementById('loginPassword').value;
+    if (!pw) return;
+    try {
+        const result = await api.login(pw);
+        if (result.ok) {
+            hideLoginOverlay();
+            document.getElementById('logoutBtn').style.display = '';
+            await loadDashboard();
+            populateChannelSelector();
+            refreshInterval = setInterval(refreshCurrentTab, 3000);
+        } else {
+            document.getElementById('loginError').textContent = result.data.error || 'Invalid password';
+        }
+    } catch (e) {
+        document.getElementById('loginError').textContent = 'Connection error';
+    }
+}
+
+async function doLogout() {
+    await api.logout();
+    document.getElementById('logoutBtn').style.display = 'none';
+    showLoginOverlay();
+}
+
+/* ============== Token Management ============== */
+async function loadTokens() {
+    try {
+        const data = await api.listTokens();
+        const tbody = document.getElementById('tokenList');
+        const status = document.getElementById('tokenStatus');
+        status.textContent = data.enabled
+            ? `${data.tokens.length} token(s) configured`
+            : 'Token auth not configured';
+        if (data.tokens.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-secondary);text-align:center;padding:40px">No tokens yet — API is open until the first token is created</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.tokens.map(t => `
+            <tr>
+                <td style="font-family:monospace;font-size:0.8rem">${esc(t.id)}</td>
+                <td>${t.agent_id ? esc(t.agent_id) : '<em style="color:var(--warning)">supertoken</em>'}</td>
+                <td>${esc(t.label)}</td>
+                <td style="font-family:monospace;font-size:0.8rem">${esc(t.token_prefix)}…</td>
+                <td style="font-size:0.8rem;color:var(--text-secondary)">${formatTime(t.created_at)}</td>
+                <td style="font-size:0.8rem;color:var(--text-secondary)">${t.last_used_at ? formatTime(t.last_used_at) : '-'}</td>
+                <td>
+                    <button class="btn btn-secondary btn-sm-action" onclick="rotateToken('${t.id}')">Rotate</button>
+                    <button class="btn btn-danger btn-sm-action" onclick="deleteToken('${t.id}')">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Tokens load error:', e);
+    }
+}
+
+function showCreateTokenModal() {
+    document.getElementById('createTokenModal').classList.remove('hidden');
+    document.getElementById('newTokenAgentId').value = '';
+    document.getElementById('newTokenLabel').value = '';
+    document.getElementById('newTokenAgentId').focus();
+}
+
+function hideCreateTokenModal() {
+    document.getElementById('createTokenModal').classList.add('hidden');
+}
+
+async function submitCreateToken() {
+    const agentId = document.getElementById('newTokenAgentId').value.trim();
+    const label = document.getElementById('newTokenLabel').value.trim();
+    try {
+        const result = await api.createToken(agentId, label);
+        hideCreateTokenModal();
+        if (result.ok && result.token) {
+            showTokenReveal(result.token.token, 'New token created — copy it now, it won\'t be shown again:');
+            showToast('Token created for ' + (agentId || 'supertoken'), 'success');
+        }
+        loadTokens();
+    } catch (e) {
+        showToast('Failed to create token', 'error');
+    }
+}
+
+async function deleteToken(id) {
+    if (!confirm('Delete this token? Agents using it will be locked out immediately.')) return;
+    try {
+        await api.deleteToken(id);
+        showToast('Token deleted', 'success');
+        loadTokens();
+    } catch (e) {
+        showToast('Failed to delete token', 'error');
+    }
+}
+
+async function rotateToken(id) {
+    if (!confirm('Rotate this token? The old value will stop working immediately.')) return;
+    try {
+        const result = await api.rotateToken(id);
+        if (result.ok && result.token) {
+            showTokenReveal(result.token.token, 'Token rotated — copy the new value:');
+            showToast('Token rotated', 'success');
+        }
+        loadTokens();
+    } catch (e) {
+        showToast('Failed to rotate token', 'error');
+    }
+}
+
+function showTokenReveal(tokenValue, label) {
+    const area = document.getElementById('tokenRevealArea');
+    area.innerHTML = `
+        <div class="token-reveal">
+            <div class="token-reveal-label">⚠️ ${esc(label)}</div>
+            <div class="token-reveal-value">${esc(tokenValue)}</div>
+            <button class="btn btn-primary btn-sm" onclick="copyToken('${esc(tokenValue)}')">📋 Copy to Clipboard</button>
+            <button class="btn btn-secondary btn-sm" onclick="this.parentElement.remove()" style="margin-left:8px">Dismiss</button>
+        </div>
+    `;
+}
+
+function copyToken(token) {
+    navigator.clipboard.writeText(token).then(
+        () => showToast('Token copied to clipboard', 'success'),
+        () => showToast('Failed to copy — select and copy manually', 'error')
+    );
+}
+
 /* ============== Init ============== */
 async function init() {
+    try {
+        const auth = await api.checkAuth();
+        if (auth.required && !auth.authenticated) {
+            showLoginOverlay();
+            return;
+        }
+        if (auth.required) {
+            document.getElementById('logoutBtn').style.display = '';
+        }
+    } catch (e) {
+        // No auth configured or server unreachable — proceed without login
+    }
     await loadDashboard();
     populateChannelSelector();
     refreshInterval = setInterval(refreshCurrentTab, 3000);

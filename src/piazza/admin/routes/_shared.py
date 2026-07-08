@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def send_cors_headers(handler: AdminRequestHandler) -> None:
     """Send CORS headers on the response."""
     handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 
