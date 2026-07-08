@@ -140,6 +140,26 @@ class TestSessionAuth:
         assert auth.validate_session(token) is True
         assert auth.validate_session("wrong") is False
 
+    def test_sessions_are_unique(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("test-password")
+        t1 = auth.create_session()
+        t2 = auth.create_session()
+        assert t1 != t2
+        assert auth.validate_session(t1) is True
+        assert auth.validate_session(t2) is True
+
+    def test_revoke_session(self):
+        from piazza.admin.auth import SessionAuth
+
+        auth = SessionAuth("test-password")
+        t1 = auth.create_session()
+        t2 = auth.create_session()
+        auth.revoke_session(t1)
+        assert auth.validate_session(t1) is False
+        assert auth.validate_session(t2) is True
+
     def test_backward_compat_alias(self):
         from piazza.admin.auth import TokenAuth
 

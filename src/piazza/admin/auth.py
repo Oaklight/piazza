@@ -4,22 +4,28 @@ Provides session-cookie-based authentication so the ``Authorization``
 header is free for agent Bearer tokens. Static assets (HTML, JS, CSS)
 are served without auth so the login overlay can render.
 
-Session tokens are HMAC-SHA256 of the admin password + a random nonce,
-stored in an ``HttpOnly; SameSite=Strict`` cookie.
+Each login generates a random session token stored in an in-memory set.
+Tokens are stored in ``HttpOnly; SameSite=Strict`` cookies. Logout
+removes the token from the set, immediately invalidating that session.
+Sessions do not survive server restarts (by design — admin sessions
+are short-lived).
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
+import threading
 from http import cookies
 from http.server import BaseHTTPRequestHandler
 
 
 class SessionAuth:
     """Session-cookie-based admin authentication.
+
+    Each login generates a unique random token tracked in memory.
+    Logout invalidates the specific session without affecting others.
 
     Args:
         password: Admin password. If None, a random 16-char hex
@@ -29,6 +35,8 @@ class SessionAuth:
         >>> auth = SessionAuth("my-secret")
         >>> token = auth.create_session()
         >>> auth.validate_session(token)  # True
+        >>> auth.revoke_session(token)
+        >>> auth.validate_session(token)  # False
     """
 
     COOKIE_NAME = "piazza_session"
@@ -38,7 +46,8 @@ class SessionAuth:
             self._password = secrets.token_hex(16)
         else:
             self._password = password
-        self._nonce = secrets.token_hex(16)
+        self._sessions: set[str] = set()
+        self._lock = threading.Lock()
 
     @property
     def password(self) -> str:
@@ -46,19 +55,20 @@ class SessionAuth:
         return self._password
 
     def create_session(self) -> str:
-        """Create a session token derived from password + nonce.
+        """Create a new random session token and track it.
 
         Returns:
-            HMAC-SHA256 hex string to store in cookie.
+            Random hex string to store in cookie.
         """
-        return hmac.new(
-            self._nonce.encode(),
-            self._password.encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        token = secrets.token_hex(32)
+        with self._lock:
+            self._sessions.add(token)
+        return token
 
     def validate_session(self, session_token: str) -> bool:
-        """Validate a session token using constant-time comparison.
+        """Validate a session token against the active set.
+
+        Uses constant-time comparison to prevent timing attacks.
 
         Args:
             session_token: Token from the session cookie.
@@ -66,8 +76,21 @@ class SessionAuth:
         Returns:
             True if valid.
         """
-        expected = self.create_session()
-        return hmac.compare_digest(session_token, expected)
+        with self._lock:
+            # Iterate with constant-time compare to avoid timing leaks
+            for active in self._sessions:
+                if secrets.compare_digest(session_token, active):
+                    return True
+        return False
+
+    def revoke_session(self, session_token: str) -> None:
+        """Remove a session token from the active set.
+
+        Args:
+            session_token: Token to invalidate.
+        """
+        with self._lock:
+            self._sessions.discard(session_token)
 
     def check_password(self, provided: str) -> bool:
         """Check a password using constant-time comparison.
@@ -153,11 +176,16 @@ class SessionAuth:
         self._send_json(handler, {"authenticated": authenticated, "required": True})
 
     def handle_logout(self, handler: BaseHTTPRequestHandler) -> None:
-        """Handle ``POST /api/logout`` — clear session cookie.
+        """Handle ``POST /api/logout`` — revoke session and clear cookie.
 
         Args:
             handler: The HTTP request handler.
         """
+        # Revoke the session server-side so the token is immediately invalid
+        session_token = self._extract_cookie(handler)
+        if session_token:
+            self.revoke_session(session_token)
+
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
         handler.send_header(
@@ -209,6 +237,6 @@ TokenAuth = SessionAuth
 
 
 def _send_cors(handler: BaseHTTPRequestHandler) -> None:
-    """Send CORS headers for credentialed requests."""
+    """Send CORS headers. SameSite=Strict cookies handle cross-origin
+    protection, so Allow-Credentials is not needed."""
     handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Credentials", "true")
