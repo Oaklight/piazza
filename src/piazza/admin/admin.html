@@ -29,6 +29,8 @@
 
 /* ============== Reset & Base ============== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* Hide main content until auth check completes to prevent flash of unauthenticated content */
+body.auth-pending .app { display: none !important; }
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg-primary);
@@ -488,7 +490,7 @@ tr:hover { background: var(--accent-light); }
 }
 </style>
 </head>
-<body>
+<body class="auth-pending">
 <div class="app">
     <!-- Header -->
     <header class="header">
@@ -1170,6 +1172,7 @@ function formatTime(isoStr) {
 
 /* ============== Login / Logout ============== */
 function showLoginOverlay() {
+    document.body.classList.add('auth-pending');
     document.getElementById('loginOverlay').classList.remove('hidden');
     document.getElementById('loginError').textContent = '';
     document.getElementById('loginPassword').value = '';
@@ -1179,6 +1182,7 @@ function showLoginOverlay() {
 
 function hideLoginOverlay() {
     document.getElementById('loginOverlay').classList.add('hidden');
+    document.body.classList.remove('auth-pending');
 }
 
 async function doLogin() {
@@ -1323,6 +1327,7 @@ async function init() {
     } catch (e) {
         // No auth configured or server unreachable — proceed without login
     }
+    document.body.classList.remove('auth-pending');
     await loadDashboard();
     populateChannelSelector();
     refreshInterval = setInterval(refreshCurrentTab, 3000);
