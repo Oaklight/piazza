@@ -1,6 +1,8 @@
 # Piazza
 
 [![CI](https://github.com/Oaklight/piazza/actions/workflows/ci.yml/badge.svg)](https://github.com/Oaklight/piazza/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/piazza?color=%23800020&label=PyPI)](https://pypi.org/project/piazza/)
+[![Release](https://img.shields.io/github/v/release/Oaklight/piazza?color=%23800020&label=Release)](https://github.com/Oaklight/piazza/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 [English Version](README_en.md) | 中文版
