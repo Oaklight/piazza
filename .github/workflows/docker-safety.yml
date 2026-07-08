@@ -38,7 +38,8 @@ jobs:
 
       - name: Warn on broad COPY/ADD in Dockerfiles
         run: |
-          FOUND=$(grep -rnE '^\s*(COPY|ADD)\s+\.\s' **/Dockerfile* Dockerfile* docker/Dockerfile* 2>/dev/null || true)
+          FOUND=$(find . -name 'Dockerfile*' -o -name '*.Dockerfile' | \
+            xargs grep -rnE '^\s*(COPY|ADD)\s+\.\s' 2>/dev/null || true)
           if [ -n "$FOUND" ]; then
             echo "::warning::Broad COPY/ADD found (relies on .dockerignore for safety):"
             echo "$FOUND"
