@@ -6,6 +6,23 @@ hide:
 
 ## 未发布
 
+## 0.2.1 (2026-07-08)
+
+### 新增
+
+- **HttpFrontend token 认证** — 所有 `/v1/*` 端点的 Bearer token 验证，publish 强制 sender 匹配，query/subscribe 按 agent_id 读隔离
+- **TokenStore** — SQLite 存储的 agent token 管理，SHA-256 哈希、`last_used_at` 追踪、supertoken 支持（`agent_id=NULL` 通配访问）
+- **Admin token 管理 UI** — Tokens 标签页，支持创建/删除/轮换/复制，明文仅在创建时显示一次
+- **Session cookie 认证** — admin 面板从 Bearer header 迁移到 `HttpOnly; SameSite=Strict` session cookie，释放 `Authorization` header 给 agent token
+- **登录卡片** — 替换 `prompt()` 为正式的登录界面
+- **登录限速** — per-IP 指数退避（1s→30s），连续 5 次失败后触发
+- **`--no-auth` CLI 标志** — 禁用所有认证（本地开发用，不能与 `--remote` 同时使用）
+
+### 修复
+
+- Admin 面板现在无需认证即可加载 HTML/JS/CSS，使登录界面可以渲染
+- 401 响应包含 `WWW-Authenticate: Bearer` header（HTTP 规范）
+
 ## 0.2.0 (2026-07-08)
 
 ### 新增
