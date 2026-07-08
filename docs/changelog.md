@@ -6,6 +6,23 @@ hide:
 
 ## Unreleased
 
+## 0.2.1 (2026-07-08)
+
+### Added
+
+- **HttpFrontend token auth** — Bearer token validation on all `/v1/*` endpoints, sender match enforcement on publish, read isolation on query/subscribe per agent_id
+- **TokenStore** — SQLite-backed agent token management with SHA-256 hashing, `last_used_at` tracking, supertoken support (`agent_id=NULL` for wildcard access)
+- **Admin token management UI** — Tokens tab with create/delete/rotate/copy-to-clipboard, plaintext shown once at creation
+- **Session cookie auth** — admin panel migrated from Bearer header to `HttpOnly; SameSite=Strict` session cookies, freeing `Authorization` header for agent tokens
+- **Login overlay** — replaces `prompt()` with proper login card UI
+- **Login rate limiting** — per-IP exponential backoff (1s→30s) after 5 consecutive failures
+- **`--no-auth` CLI flag** — disables all auth for local dev (cannot be used with `--remote`)
+
+### Fixed
+
+- Admin panel now serves HTML/JS/CSS without auth so login overlay can render
+- `WWW-Authenticate: Bearer` header included on 401 responses (HTTP spec)
+
 ## 0.2.0 (2026-07-08)
 
 ### Added
