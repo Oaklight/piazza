@@ -263,6 +263,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     )
     logger = logging.getLogger("piazza")
 
+    # --no-auth + --remote is dangerous — refuse to start
+    if args.no_auth and args.remote:
+        logger.error(
+            "--no-auth cannot be used with --remote (would expose unauthenticated API to the network)"
+        )
+        sys.exit(1)
+
     bus = SQLiteBus(args.db)
     logger.info("Bus started with database: %s", args.db)
 
@@ -339,7 +346,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         "host": "0.0.0.0" if args.remote else "127.0.0.1",
         "port": args.admin_port,
         "serve_ui": not args.no_ui,
-        "remote": args.remote if not args.no_auth else False,
+        "remote": args.remote,
         "token_store": token_store,
     }
     if args.token:
