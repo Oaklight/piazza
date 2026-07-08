@@ -6,8 +6,11 @@ hide:
 
 ## 未发布
 
+## 0.2.0 (2026-07-08)
+
 ### 新增
 
+- **Docker 打包**: `oaklight/piazza` 镜像（Alpine、非 root、PUID/PGID 映射、多架构 amd64+arm64），docker-compose 参考配置含健康检查，发版时 CI 自动构建
 - **CLI 子命令**: `piazza serve`（支持 `--http`、`--irc` 前端）和 `piazza client`（send/poll/channels/dm）
 - **HttpFrontend**: REST API + SSE 实时推送，用于远程 Agent 接入（`/v1/publish`、`/v1/query`、`/v1/subscribe`）
 - **IrcFrontend**: piazza 频道与 IRC 频道双向桥接（可选依赖 `piazza[irc]`）
