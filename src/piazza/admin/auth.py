@@ -17,8 +17,16 @@ import hashlib
 import json
 import secrets
 import threading
+import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler
+
+# Login rate limiting: per-IP tracking of failed attempts.
+# After MAX_FAILURES consecutive failures, enforce an exponential
+# backoff delay before the next attempt is processed.
+_MAX_FAILURES = 5
+_BASE_DELAY = 1.0  # seconds, doubles each failure beyond MAX_FAILURES
+_MAX_DELAY = 30.0  # cap
 
 
 class SessionAuth:
@@ -48,6 +56,9 @@ class SessionAuth:
             self._password = password
         self._sessions: set[str] = set()
         self._lock = threading.Lock()
+        # Rate limiting: {client_ip: (failure_count, last_attempt_time)}
+        self._login_attempts: dict[str, tuple[int, float]] = {}
+        self._rate_lock = threading.Lock()
 
     @property
     def password(self) -> str:
@@ -136,13 +147,61 @@ class SessionAuth:
         self._send_unauthorized(handler, "Admin authentication required")
         return False
 
+    def _check_rate_limit(self, client_ip: str) -> float:
+        """Check if a login attempt should be delayed.
+
+        Args:
+            client_ip: The client's IP address.
+
+        Returns:
+            Seconds to wait (0 if no delay needed).
+        """
+        with self._rate_lock:
+            entry = self._login_attempts.get(client_ip)
+            if entry is None:
+                return 0
+            failures, last_time = entry
+            if failures < _MAX_FAILURES:
+                return 0
+            # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 30s
+            delay = min(_BASE_DELAY * (2 ** (failures - _MAX_FAILURES)), _MAX_DELAY)
+            elapsed = time.monotonic() - last_time
+            return max(0, delay - elapsed)
+
+    def _record_failure(self, client_ip: str) -> None:
+        """Record a failed login attempt."""
+        with self._rate_lock:
+            entry = self._login_attempts.get(client_ip)
+            count = (entry[0] + 1) if entry else 1
+            self._login_attempts[client_ip] = (count, time.monotonic())
+
+    def _clear_failures(self, client_ip: str) -> None:
+        """Clear failure count on successful login."""
+        with self._rate_lock:
+            self._login_attempts.pop(client_ip, None)
+
     def handle_login(self, handler: BaseHTTPRequestHandler, body: bytes) -> None:
         """Handle ``POST /api/login`` — validate password, set cookie.
+
+        Enforces per-IP rate limiting after repeated failures:
+        exponential backoff from 1s to 30s after 5 consecutive failures.
 
         Args:
             handler: The HTTP request handler.
             body: Raw request body (JSON with ``password`` field).
         """
+        client_ip = handler.client_address[0]
+
+        # Rate limit check
+        wait = self._check_rate_limit(client_ip)
+        if wait > 0:
+            self._send_json(
+                handler,
+                {"error": "Too many attempts", "retry_after": round(wait, 1)},
+                429,
+            )
+            return
+
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
@@ -151,9 +210,11 @@ class SessionAuth:
 
         password = data.get("password", "")
         if not self.check_password(password):
+            self._record_failure(client_ip)
             self._send_json(handler, {"error": "Invalid password"}, 401)
             return
 
+        self._clear_failures(client_ip)
         session_token = self.create_session()
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
