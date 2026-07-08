@@ -1,6 +1,6 @@
 """piazza - Agent messaging hub for multi-agent collaboration."""
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from piazza.backends import MemoryBackend, SQLiteBackend
 from piazza.bus import Bus, SQLiteBus
