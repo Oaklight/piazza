@@ -5,6 +5,8 @@ Manages agent tokens (create, validate, rotate, delete) with:
 - Constant-time comparison — prevents timing attacks
 - Supertoken support — agent_id=NULL grants wildcard access
 - last_used_at tracking — updated on every validated request
+- Thread-local connection pool — one SQLite connection per thread,
+  reused across calls to avoid per-request connection overhead
 
 Token format: ``pzt-{48 hex chars}`` (piazza token).
 """
@@ -14,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -54,7 +57,9 @@ class TokenStore:
     """SQLite-backed agent token store.
 
     Uses the same database file as the message bus. Creates a
-    ``tokens`` table if it does not exist.
+    ``tokens`` table if it does not exist. Connections are cached
+    per-thread via ``threading.local()`` to avoid opening a new
+    SQLite connection on every request.
 
     Args:
         db_path: Path to the SQLite database file.
@@ -69,20 +74,25 @@ class TokenStore:
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
+        self._local = threading.local()
         self._ensure_table()
 
-    def _connect(self) -> sqlite3.Connection:
-        """Open a new connection with WAL mode and busy timeout."""
-        conn = sqlite3.connect(self._db_path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.row_factory = sqlite3.Row
+    def _conn(self) -> sqlite3.Connection:
+        """Return a thread-local SQLite connection, creating one if needed."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
         return conn
 
     def _ensure_table(self) -> None:
         """Create the tokens table if it does not exist."""
-        with self._connect() as conn:
-            conn.execute(_CREATE_TABLE)
+        conn = self._conn()
+        conn.execute(_CREATE_TABLE)
+        conn.commit()
 
     def list_tokens(self) -> list[dict[str, Any]]:
         """List all tokens with metadata (no secret values).
@@ -91,11 +101,14 @@ class TokenStore:
             List of token entries with id, token_prefix, agent_id,
             label, created_at, and last_used_at.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
+        rows = (
+            self._conn()
+            .execute(
                 "SELECT id, token_prefix, agent_id, label, created_at, last_used_at "
                 "FROM tokens ORDER BY created_at DESC"
-            ).fetchall()
+            )
+            .fetchall()
+        )
         return [dict(row) for row in rows]
 
     def create_token(
@@ -120,12 +133,13 @@ class TokenStore:
         token_id = uuid.uuid4().hex[:8]
         now = _now_iso()
 
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO tokens (id, token_hash, token_prefix, agent_id, label, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (token_id, token_hash, token_prefix, agent_id, label, now),
-            )
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO tokens (id, token_hash, token_prefix, agent_id, label, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (token_id, token_hash, token_prefix, agent_id, label, now),
+        )
+        conn.commit()
 
         return {
             "id": token_id,
@@ -146,9 +160,10 @@ class TokenStore:
         Returns:
             True if deleted, False if not found.
         """
-        with self._connect() as conn:
-            cursor = conn.execute("DELETE FROM tokens WHERE id = ?", (token_id,))
-            return cursor.rowcount > 0
+        conn = self._conn()
+        cursor = conn.execute("DELETE FROM tokens WHERE id = ?", (token_id,))
+        conn.commit()
+        return cursor.rowcount > 0
 
     def rotate_token(self, token_id: str) -> dict[str, Any] | None:
         """Rotate a token: generate new value, keep same ID and metadata.
@@ -164,19 +179,20 @@ class TokenStore:
         new_hash = _hash_token(new_token)
         new_prefix = new_token[:_DISPLAY_PREFIX_LEN]
 
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE tokens SET token_hash = ?, token_prefix = ? WHERE id = ?",
-                (new_hash, new_prefix, token_id),
-            )
-            if cursor.rowcount == 0:
-                return None
+        conn = self._conn()
+        cursor = conn.execute(
+            "UPDATE tokens SET token_hash = ?, token_prefix = ? WHERE id = ?",
+            (new_hash, new_prefix, token_id),
+        )
+        if cursor.rowcount == 0:
+            return None
 
-            row = conn.execute(
-                "SELECT id, token_prefix, agent_id, label, created_at, last_used_at "
-                "FROM tokens WHERE id = ?",
-                (token_id,),
-            ).fetchone()
+        row = conn.execute(
+            "SELECT id, token_prefix, agent_id, label, created_at, last_used_at "
+            "FROM tokens WHERE id = ?",
+            (token_id,),
+        ).fetchone()
+        conn.commit()
 
         result = dict(row)
         result["token"] = new_token
@@ -186,6 +202,7 @@ class TokenStore:
         """Validate a token and return the associated agent_id.
 
         Uses constant-time comparison to prevent timing attacks.
+        Updates ``last_used_at`` in the same connection (no extra open).
 
         Args:
             token_str: The plaintext token from the request.
@@ -199,11 +216,11 @@ class TokenStore:
             return False
 
         provided_hash = _hash_token(token_str)
+        conn = self._conn()
 
-        with self._connect() as conn:
-            # Fetch all token hashes for constant-time scan.
-            # For typical deployments (< 1000 tokens) this is fine.
-            rows = conn.execute("SELECT id, token_hash, agent_id FROM tokens").fetchall()
+        # Fetch all token hashes for constant-time scan.
+        # For typical deployments (< 1000 tokens) this is fine.
+        rows = conn.execute("SELECT id, token_hash, agent_id FROM tokens").fetchall()
 
         matched_id: str | None = None
         matched_agent: str | None | bool = False
@@ -217,13 +234,13 @@ class TokenStore:
         if matched_id is None:
             return False
 
-        # Update last_used_at (best-effort, don't block on failure)
+        # Update last_used_at in the same connection (best-effort)
         try:
-            with self._connect() as conn:
-                conn.execute(
-                    "UPDATE tokens SET last_used_at = ? WHERE id = ?",
-                    (_now_iso(), matched_id),
-                )
+            conn.execute(
+                "UPDATE tokens SET last_used_at = ? WHERE id = ?",
+                (_now_iso(), matched_id),
+            )
+            conn.commit()
         except sqlite3.Error:
             pass
 
@@ -235,6 +252,5 @@ class TokenStore:
         Returns:
             True if at least one token is configured.
         """
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) FROM tokens").fetchone()
-            return row[0] > 0
+        row = self._conn().execute("SELECT COUNT(*) FROM tokens").fetchone()
+        return row[0] > 0
