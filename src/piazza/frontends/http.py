@@ -307,6 +307,13 @@ class _HttpHandler(BaseHTTPRequestHandler):
     def _handle_subscribe(self, qs: dict[str, list[str]], auth_result: Any) -> None:
         """SSE endpoint — streams new messages for subscribed channels.
 
+        Auth is validated once at connection time (validate-once-at-connect).
+        If a token is rotated or deleted after the SSE connection is
+        established, the existing connection continues until the client
+        disconnects or reconnects. This is consistent with WebSocket auth
+        patterns and avoids the complexity of periodic re-validation on a
+        long-lived HTTP stream.
+
         Query params:
             channel: one or more channel names to subscribe to
             agent_id: the subscribing agent's ID (for logging)
@@ -438,7 +445,14 @@ class _HttpHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _error(self, status: int, error: str, message: str) -> None:
-        self._json({"error": error, "message": message}, status)
+        body = json.dumps({"error": error, "message": message}, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        if status == 401:
+            self.send_header("WWW-Authenticate", 'Bearer realm="piazza"')
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", self.cors_origin)
