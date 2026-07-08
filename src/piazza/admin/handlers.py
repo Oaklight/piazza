@@ -123,7 +123,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
 
         # Prefix match: /api/tokens/{id}/rotate
         if path.startswith("/api/tokens/") and path.endswith("/rotate"):
-            token_id = path[len("/api/tokens/") : -len("/rotate")]
+            token_id = urllib.parse.unquote(path[len("/api/tokens/") : -len("/rotate")])
             tokens.handle_rotate_token(self, token_id)
             return
 
