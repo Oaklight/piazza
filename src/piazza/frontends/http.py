@@ -44,6 +44,23 @@ _DEFAULT_MAX_QUERY_LIMIT = 10_000
 _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 
 
+def _agent_involved(agent_id: str, channel: str, sender: str) -> bool:
+    """Check if an agent is involved in a message (sender or channel member).
+
+    Uses exact segment matching on ``:``-delimited channel names to avoid
+    substring false positives (e.g., "bob" must not match "bobby").
+
+    Piazza channel naming conventions:
+    - ``dm:agent-a:agent-b`` — direct messages
+    - ``_system:registry`` — system channels
+    - ``general`` — plain channel names
+    """
+    if sender == agent_id:
+        return True
+    # Check exact segment match in :-delimited channel name
+    return agent_id in channel.split(":")
+
+
 class _AtomicCounter:
     """Lock-free counter using list-swap for cross-thread drain.
 
@@ -250,7 +267,7 @@ class _HttpHandler(BaseHTTPRequestHandler):
         # Read isolation: scoped tokens only see messages where they are
         # the sender or recipient (DM channels containing their agent_id).
         if isinstance(auth_result, str):
-            msgs = [m for m in msgs if m.sender == auth_result or auth_result in m.channel]
+            msgs = [m for m in msgs if _agent_involved(auth_result, m.channel, m.sender)]
 
         self._json(
             {
@@ -306,7 +323,9 @@ class _HttpHandler(BaseHTTPRequestHandler):
         # Supertokens and no-auth skip this check.
         if isinstance(auth_result, str):
             forbidden = [
-                ch for ch in channels if auth_result not in ch and not ch.startswith("_system:")
+                ch
+                for ch in channels
+                if not ch.startswith("_system:") and auth_result not in ch.split(":")
             ]
             if forbidden:
                 self._error(
@@ -330,10 +349,8 @@ class _HttpHandler(BaseHTTPRequestHandler):
         def _make_callback(ch: str):
             def _cb(msg):
                 # Read isolation: scoped tokens skip messages not involving them
-                if (
-                    isinstance(auth_result, str)
-                    and msg.sender != auth_result
-                    and auth_result not in msg.channel
+                if isinstance(auth_result, str) and not _agent_involved(
+                    auth_result, msg.channel, msg.sender
                 ):
                     return
                 try:
