@@ -1,85 +1,214 @@
 """Authentication module for admin panel.
 
-Provides simple token-based authentication using constant-time
-comparison to prevent timing attacks.
+Provides session-cookie-based authentication so the ``Authorization``
+header is free for agent Bearer tokens. Static assets (HTML, JS, CSS)
+are served without auth so the login overlay can render.
+
+Session tokens are HMAC-SHA256 of the admin password + a random nonce,
+stored in an ``HttpOnly; SameSite=Strict`` cookie.
 """
 
+from __future__ import annotations
+
 import hashlib
+import hmac
 import json
 import secrets
+from http import cookies
 from http.server import BaseHTTPRequestHandler
 
 
-class TokenAuth:
-    """Simple token-based authentication.
+class SessionAuth:
+    """Session-cookie-based admin authentication.
 
     Args:
-        token: Optional authentication token. If None, a random
-            32-character hex token is generated.
+        password: Admin password. If None, a random 16-char hex
+            password is generated.
 
     Example:
-        >>> auth = TokenAuth()
-        >>> print(f"Use token: {auth.token}")
-        >>> auth.verify("some_token")  # Returns True/False
+        >>> auth = SessionAuth("my-secret")
+        >>> token = auth.create_session()
+        >>> auth.validate_session(token)  # True
     """
 
-    def __init__(self, token: str | None = None) -> None:
-        if token is None:
-            self._token = secrets.token_hex(16)
+    COOKIE_NAME = "piazza_session"
+
+    def __init__(self, password: str | None = None) -> None:
+        if password is None:
+            self._password = secrets.token_hex(16)
         else:
-            self._token = token
+            self._password = password
+        self._nonce = secrets.token_hex(16)
 
     @property
-    def token(self) -> str:
-        """Get the authentication token."""
-        return self._token
+    def password(self) -> str:
+        """Get the admin password."""
+        return self._password
 
-    def verify(self, provided_token: str) -> bool:
-        """Verify a provided token using constant-time comparison.
-
-        Args:
-            provided_token: The token to verify.
+    def create_session(self) -> str:
+        """Create a session token derived from password + nonce.
 
         Returns:
-            True if the token matches, False otherwise.
+            HMAC-SHA256 hex string to store in cookie.
         """
-        expected_hash = hashlib.sha256(self._token.encode()).digest()
-        provided_hash = hashlib.sha256(provided_token.encode()).digest()
+        return hmac.new(
+            self._nonce.encode(),
+            self._password.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def validate_session(self, session_token: str) -> bool:
+        """Validate a session token using constant-time comparison.
+
+        Args:
+            session_token: Token from the session cookie.
+
+        Returns:
+            True if valid.
+        """
+        expected = self.create_session()
+        return hmac.compare_digest(session_token, expected)
+
+    def check_password(self, provided: str) -> bool:
+        """Check a password using constant-time comparison.
+
+        Args:
+            provided: The password to check.
+
+        Returns:
+            True if correct.
+        """
+        expected_hash = hashlib.sha256(self._password.encode()).digest()
+        provided_hash = hashlib.sha256(provided.encode()).digest()
         return secrets.compare_digest(expected_hash, provided_hash)
 
     def require_auth(self, handler: BaseHTTPRequestHandler) -> bool:
-        """Check Authorization header and send 401 if invalid.
+        """Check session cookie and gate API access.
 
-        Expects "Bearer <token>" format.
+        - ``/api/login``, ``/api/logout``, ``/api/auth-check``: always allowed
+        - ``/api/*``: require valid session cookie → 401 if missing
+        - Everything else (``/``, static assets): allowed without auth
 
         Args:
             handler: The HTTP request handler to check.
 
         Returns:
-            True if valid, False otherwise (401 already sent).
+            True if request should proceed, False if 401 was sent.
         """
-        auth_header = handler.headers.get("Authorization", "")
+        path = handler.path.split("?")[0]
 
-        if not auth_header:
-            self._send_unauthorized(handler, "Missing Authorization header")
-            return False
+        # Login, logout, and auth-check are always accessible
+        if path in ("/api/login", "/api/logout", "/api/auth-check"):
+            return True
 
-        parts = auth_header.split(" ", 1)
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            self._send_unauthorized(handler, "Invalid Authorization format")
-            return False
+        # Non-API paths (HTML, static assets) pass through
+        if not path.startswith("/api/"):
+            return True
 
-        if not self.verify(parts[1]):
-            self._send_unauthorized(handler, "Invalid token")
-            return False
+        # API paths require valid session cookie
+        session_token = self._extract_cookie(handler)
+        if session_token and self.validate_session(session_token):
+            return True
 
-        return True
+        self._send_unauthorized(handler, "Admin authentication required")
+        return False
 
-    def _send_unauthorized(self, handler: BaseHTTPRequestHandler, message: str) -> None:
+    def handle_login(self, handler: BaseHTTPRequestHandler, body: bytes) -> None:
+        """Handle ``POST /api/login`` — validate password, set cookie.
+
+        Args:
+            handler: The HTTP request handler.
+            body: Raw request body (JSON with ``password`` field).
+        """
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            self._send_json(handler, {"error": "Invalid JSON"}, 400)
+            return
+
+        password = data.get("password", "")
+        if not self.check_password(password):
+            self._send_json(handler, {"error": "Invalid password"}, 401)
+            return
+
+        session_token = self.create_session()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header(
+            "Set-Cookie",
+            f"{self.COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/",
+        )
+        _send_cors(handler)
+        handler.end_headers()
+        handler.wfile.write(json.dumps({"ok": True}).encode())
+
+    def handle_auth_check(self, handler: BaseHTTPRequestHandler) -> None:
+        """Handle ``GET /api/auth-check`` — return auth status.
+
+        Args:
+            handler: The HTTP request handler.
+        """
+        session_token = self._extract_cookie(handler)
+        authenticated = bool(session_token and self.validate_session(session_token))
+        self._send_json(handler, {"authenticated": authenticated, "required": True})
+
+    def handle_logout(self, handler: BaseHTTPRequestHandler) -> None:
+        """Handle ``POST /api/logout`` — clear session cookie.
+
+        Args:
+            handler: The HTTP request handler.
+        """
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header(
+            "Set-Cookie",
+            f"{self.COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        )
+        _send_cors(handler)
+        handler.end_headers()
+        handler.wfile.write(json.dumps({"ok": True}).encode())
+
+    # ── Helpers ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_cookie(handler: BaseHTTPRequestHandler) -> str | None:
+        """Extract session cookie value from request headers."""
+        cookie_header = handler.headers.get("Cookie", "")
+        if not cookie_header:
+            return None
+        try:
+            c = cookies.SimpleCookie(cookie_header)
+            morsel = c.get(SessionAuth.COOKIE_NAME)
+            return morsel.value if morsel else None
+        except cookies.CookieError:
+            return None
+
+    @staticmethod
+    def _send_json(handler: BaseHTTPRequestHandler, data: dict, status: int = 200) -> None:
+        """Send a JSON response."""
+        body = json.dumps(data).encode()
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json")
+        _send_cors(handler)
+        handler.end_headers()
+        handler.wfile.write(body)
+
+    @staticmethod
+    def _send_unauthorized(handler: BaseHTTPRequestHandler, message: str) -> None:
         """Send a 401 Unauthorized response."""
+        body = json.dumps({"error": "Unauthorized", "message": message}).encode()
         handler.send_response(401)
         handler.send_header("Content-Type", "application/json")
-        handler.send_header("WWW-Authenticate", 'Bearer realm="admin"')
+        _send_cors(handler)
         handler.end_headers()
-        response = json.dumps({"error": "Unauthorized", "message": message})
-        handler.wfile.write(response.encode("utf-8"))
+        handler.wfile.write(body)
+
+
+# Keep backward-compatible name for imports (deprecated)
+TokenAuth = SessionAuth
+
+
+def _send_cors(handler: BaseHTTPRequestHandler) -> None:
+    """Send CORS headers for credentialed requests."""
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Credentials", "true")

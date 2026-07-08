@@ -209,36 +209,18 @@ class Bus:
         """
         return {channel: list(subs.keys()) for channel, subs in self._subs.items() if subs}
 
-    def start_admin(
-        self,
-        host: str = "127.0.0.1",
-        port: int = 8741,
-        serve_ui: bool = True,
-        remote: bool = False,
-        auth_token: str | None = None,
-    ) -> AdminInfo:
+    def start_admin(self, **kwargs) -> AdminInfo:
         """Start the admin panel HTTP server.
 
-        Args:
-            host: Host to bind to. Defaults to localhost.
-            port: Port to listen on. Defaults to 8741.
-            serve_ui: Whether to serve the web UI.
-            remote: Allow remote connections (binds to 0.0.0.0).
-            auth_token: Optional auth token. Auto-generated if remote=True.
+        Accepts all keyword arguments of ``AdminServer.__init__``
+        (except ``bus``, which is ``self``).
 
         Returns:
-            AdminInfo with server URL and token.
+            AdminInfo with server URL and password.
         """
         from piazza.admin import AdminServer
 
-        self._admin_server = AdminServer(
-            self,
-            host=host,
-            port=port,
-            serve_ui=serve_ui,
-            remote=remote,
-            auth_token=auth_token,
-        )
+        self._admin_server = AdminServer(self, **kwargs)
         return self._admin_server.start()
 
     def stop_admin(self) -> None:
