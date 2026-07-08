@@ -6,8 +6,11 @@ hide:
 
 ## Unreleased
 
+## 0.2.0 (2026-07-08)
+
 ### Added
 
+- **Docker packaging**: `oaklight/piazza` image (Alpine, non-root, PUID/PGID mapping, multi-arch amd64+arm64), docker-compose reference with healthcheck, CI auto-build on release
 - **CLI subcommands**: `piazza serve` (with `--http`, `--irc` frontends) and `piazza client` (send/poll/channels/dm)
 - **HttpFrontend**: REST API + SSE push for remote agent access (`/v1/publish`, `/v1/query`, `/v1/subscribe`)
 - **IrcFrontend**: bidirectional bridge between piazza channels and IRC (optional `piazza[irc]` extra)
