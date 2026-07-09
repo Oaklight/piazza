@@ -56,6 +56,8 @@ class PiazzaClient:
         secret: Authentication secret. Required when bus has
             require_auth=True.
         display_name: Human-readable name. Defaults to agent_id.
+        token: API token for HttpFrontend authentication (``pzt-...``).
+            Only used when target is an HTTP URL.
 
     Example:
         >>> bus = Bus(backend=MemoryBackend())
@@ -63,6 +65,9 @@ class PiazzaClient:
         >>> client.note_write("hello world")
         >>> print(client.note_read())
         >>> client.close()
+
+        # Remote with token auth:
+        >>> client = PiazzaClient("http://server:8742", "agent-alice", token="pzt-xxx")
     """
 
     def __init__(
@@ -72,11 +77,13 @@ class PiazzaClient:
         *,
         secret: str | None = None,
         display_name: str | None = None,
+        token: str | None = None,
     ) -> None:
         self._validate_agent_id(agent_id)
         self._agent_id = agent_id
         self._display_name = display_name or agent_id
         self._secret = secret
+        self._token = token
         self._cursors: dict[str, str] = {}
         self._owns_bus = False
         self._bus: Bus | None = None
@@ -135,7 +142,7 @@ class PiazzaClient:
         if lower.startswith(("http://", "https://")):
             from piazza.transport_http import HttpTransport
 
-            return HttpTransport(target, agent_id=self._agent_id), None, False
+            return HttpTransport(target, agent_id=self._agent_id, token=self._token), None, False
         if lower.startswith(("redis://", "amqp://")):
             raise NotImplementedError(
                 f"Backend for {lower.split('://')[0]}:// is not yet implemented."
