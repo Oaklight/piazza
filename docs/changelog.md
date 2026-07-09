@@ -6,6 +6,23 @@ hide:
 
 ## Unreleased
 
+## 0.2.3 (2026-07-09)
+
+### Added
+
+- **HTTPS support** — HttpTransport now works over HTTPS (previously HTTP-only)
+- **`token` param** — `PiazzaClient("https://...", "agent-id", token="pzt-xxx")` for authenticated remote access
+- **`--api-token` CLI flag** — all `piazza client` subcommands support Bearer token auth
+
+### Changed
+
+- **Vendored zerodep modules** — `httpclient` (v0.4.4) and `sse` (v0.3.2) replace hand-written HTTP/SSE code in HttpTransport
+- SSE streaming uses `SSEClient` with auto-reconnect and W3C-compliant event parsing
+
+### Fixed
+
+- Admin login overlay now hides page content until authenticated (no flash of unauthenticated dashboard)
+
 ## 0.2.1 (2026-07-08)
 
 ### Added
