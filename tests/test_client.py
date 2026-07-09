@@ -231,7 +231,7 @@ class TestPiazzaClientConstructor:
     def test_http_uses_http_transport(self):
         from piazza.transport_http import HttpTransport
 
-        stub = type("_Stub", (), {"_agent_id": "test-agent"})()
+        stub = type("_Stub", (), {"_agent_id": "test-agent", "_token": None})()
         t, bus, owns = PiazzaClient._resolve_target(stub, "http://localhost:9999")
         assert isinstance(t, HttpTransport)
         assert bus is None
@@ -241,7 +241,7 @@ class TestPiazzaClientConstructor:
     def test_https_uses_http_transport(self):
         from piazza.transport_http import HttpTransport
 
-        stub = type("_Stub", (), {"_agent_id": "test-agent"})()
+        stub = type("_Stub", (), {"_agent_id": "test-agent", "_token": None})()
         t, bus, owns = PiazzaClient._resolve_target(stub, "https://piazza.example.com")
         assert isinstance(t, HttpTransport)
         assert bus is None

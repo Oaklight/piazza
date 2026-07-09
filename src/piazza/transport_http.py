@@ -27,6 +27,7 @@ class HttpTransport:
         base_url: Server URL, e.g. "http://localhost:8741".
         agent_id: Agent identifier for SSE subscriptions.
         timeout: HTTP request timeout in seconds.
+        token: Optional Bearer token for API authentication (``pzt-...``).
     """
 
     def __init__(
@@ -34,10 +35,12 @@ class HttpTransport:
         base_url: str,
         agent_id: str = "",
         timeout: float = 10.0,
+        token: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._agent_id = agent_id
         self._timeout = timeout
+        self._token = token
 
         # SSE state
         self._sse_thread: threading.Thread | None = None
@@ -196,7 +199,7 @@ class HttpTransport:
         path = self._build_sse_path(channels)
         conn = http.client.HTTPConnection(host, port, timeout=30)
         try:
-            conn.request("GET", path)
+            conn.request("GET", path, headers=self._auth_headers())
             resp = conn.getresponse()
             if resp.status != 200:
                 self._sse_stop.wait(2)
@@ -262,23 +265,25 @@ class HttpTransport:
 
     # ── HTTP Helpers ──────────────────────────────────────────────
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Return auth headers if a token is configured."""
+        if self._token:
+            return {"Authorization": f"Bearer {self._token}"}
+        return {}
+
     def _get(self, path: str, params: dict[str, str] | None = None) -> dict:
         url = f"{self._base_url}{path}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers=self._auth_headers())
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             return json.loads(resp.read())
 
     def _post(self, path: str, body: dict) -> dict:
         url = f"{self._base_url}{path}"
         data = json.dumps(body, ensure_ascii=False).encode()
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
+        headers = {"Content-Type": "application/json", **self._auth_headers()}
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             return json.loads(resp.read())
 
