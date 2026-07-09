@@ -1,19 +1,20 @@
 """HTTP transport for PiazzaClient — connects to an HttpFrontend server.
 
-Zero external dependencies — uses urllib.request for HTTP calls and
-a background thread + http.client for SSE streaming.
+Uses vendored zerodep modules:
+- ``_vendor.httpclient`` for HTTP requests (supports HTTP + HTTPS)
+- ``_vendor.sse`` for SSE streaming (auto-reconnect, W3C-compliant parser)
 """
 
 from __future__ import annotations
 
 import contextlib
-import http.client
 import json
 import threading
 import urllib.parse
-import urllib.request
 from collections.abc import Callable
 
+from piazza._vendor.httpclient import Client as HttpClient
+from piazza._vendor.sse import SSEClient
 from piazza.types import Message
 
 
@@ -21,10 +22,11 @@ class HttpTransport:
     """Client-side transport that talks to a remote HttpFrontend.
 
     Implements the Transport protocol for PiazzaClient, enabling
-    remote agent communication over HTTP.
+    remote agent communication over HTTP/HTTPS.
 
     Args:
-        base_url: Server URL, e.g. "http://localhost:8741".
+        base_url: Server URL, e.g. ``"http://localhost:8742"`` or
+            ``"https://piazza.example.com"``.
         agent_id: Agent identifier for SSE subscriptions.
         timeout: HTTP request timeout in seconds.
         token: Optional Bearer token for API authentication (``pzt-...``).
@@ -42,10 +44,17 @@ class HttpTransport:
         self._timeout = timeout
         self._token = token
 
+        # Shared HTTP client (thread-safe, connection pooling)
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        self._http = HttpClient(headers=headers, timeout=timeout)
+
         # SSE state
+        self._sse_client: SSEClient | None = None
         self._sse_thread: threading.Thread | None = None
         self._sse_channels: set[str] = set()
-        self._sse_callbacks: dict[str, dict[str, Callable]] = {}  # channel -> {sub_id: cb}
+        self._sse_callbacks: dict[str, dict[str, Callable]] = {}
         self._sse_lock = threading.Lock()
         self._sse_stop = threading.Event()
         self._sub_counter = 0
@@ -77,8 +86,8 @@ class HttpTransport:
         if metadata:
             body["metadata"] = metadata
 
-        resp = self._post("/v1/publish", body)
-        return resp["message_id"]
+        resp = self._http.post(f"{self._base_url}/v1/publish", json=body)
+        return resp.json()["message_id"]
 
     def query(
         self,
@@ -91,27 +100,31 @@ class HttpTransport:
         if after:
             params["after"] = after
 
-        resp = self._get("/v1/query", params)
-        return [self._dict_to_msg(m) for m in resp.get("messages", [])]
+        url = f"{self._base_url}/v1/query?{urllib.parse.urlencode(params)}"
+        resp = self._http.get(url)
+        return [self._dict_to_msg(m) for m in resp.json().get("messages", [])]
 
     def list_channels(self) -> list[str]:
         """List all channels on the remote server."""
-        resp = self._get("/v1/channels")
-        return resp.get("channels", [])
+        resp = self._http.get(f"{self._base_url}/v1/channels")
+        return resp.json().get("channels", [])
 
     @property
     def require_auth(self) -> bool:
         """Whether the remote bus requires authentication."""
         if self._require_auth is None:
-            resp = self._get("/v1/auth/check")
-            self._require_auth = resp.get("require_auth", False)
+            resp = self._http.get(f"{self._base_url}/v1/auth/check")
+            self._require_auth = resp.json().get("require_auth", False)
         return self._require_auth
 
     def close(self) -> None:
         """Stop SSE thread and release resources."""
         self._sse_stop.set()
+        if self._sse_client:
+            self._sse_client.close()
         if self._sse_thread and self._sse_thread.is_alive():
             self._sse_thread.join(timeout=3)
+        self._http.close()
 
     # ── SSE Subscription ─────────────────────────────────────────
 
@@ -168,6 +181,8 @@ class HttpTransport:
     def _restart_sse(self) -> None:
         """(Re)start the SSE background thread with current channels."""
         self._sse_stop.set()
+        if self._sse_client:
+            self._sse_client.close()
         if self._sse_thread and self._sse_thread.is_alive():
             self._sse_thread.join(timeout=3)
 
@@ -176,75 +191,46 @@ class HttpTransport:
         self._sse_thread.start()
 
     def _sse_loop(self) -> None:
-        """Background loop: connect to SSE endpoint, dispatch events."""
-        parsed = urllib.parse.urlparse(self._base_url)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 80
-
-        while not self._sse_stop.is_set():
-            try:
-                self._sse_connect_once(host, port)
-            except (OSError, http.client.HTTPException):
-                if not self._sse_stop.is_set():
-                    self._sse_stop.wait(2)  # reconnect delay
-
-    def _sse_connect_once(self, host: str, port: int) -> None:
-        """Open one SSE connection and drain events until it closes."""
+        """Background loop: connect to SSE endpoint via zerodep SSEClient."""
         with self._sse_lock:
             channels = list(self._sse_channels)
         if not channels:
-            self._sse_stop.wait(1)
             return
 
-        path = self._build_sse_path(channels)
-        conn = http.client.HTTPConnection(host, port, timeout=30)
-        try:
-            conn.request("GET", path, headers=self._auth_headers())
-            resp = conn.getresponse()
-            if resp.status != 200:
-                self._sse_stop.wait(2)
-                return
-            self._drain_sse_stream(resp)
-        finally:
-            conn.close()
+        url = self._build_sse_url(channels)
+        headers: dict[str, str] = {}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
 
-    def _build_sse_path(self, channels: list[str]) -> str:
-        """Build the SSE subscribe URL path for the given channels."""
+        try:
+            self._sse_client = SSEClient(
+                url,
+                headers=headers,
+                timeout=self._timeout + 20,  # longer than keepalive interval
+                max_retries=-1,  # unlimited reconnect
+            )
+            for event in self._sse_client:
+                if self._sse_stop.is_set():
+                    break
+                self._dispatch_sse_event(event.data)
+        except Exception:
+            pass  # SSEClient handles reconnection internally
+        finally:
+            if self._sse_client:
+                self._sse_client.close()
+                self._sse_client = None
+
+    def _build_sse_url(self, channels: list[str]) -> str:
+        """Build the full SSE subscribe URL."""
         params = urllib.parse.urlencode(
             [("channel", ch) for ch in channels] + [("agent_id", self._agent_id)]
         )
-        return f"/v1/subscribe?{params}"
+        return f"{self._base_url}/v1/subscribe?{params}"
 
-    def _drain_sse_stream(self, resp) -> None:
-        """Read the SSE stream line by line, dispatching event boundaries."""
-        buf = ""
-        while not self._sse_stop.is_set():
-            line = resp.readline()
-            if not line:
-                return  # connection closed
-            decoded = line.decode("utf-8", errors="replace")
-            if decoded.strip() == "":
-                # Empty line = event boundary
-                if buf.strip():
-                    self._dispatch_sse_event(buf)
-                buf = ""
-            else:
-                buf += decoded
-
-    def _dispatch_sse_event(self, raw: str) -> None:
-        """Parse and dispatch a single SSE event."""
-        data_lines = []
-        for line in raw.split("\n"):
-            if line.startswith("data: "):
-                data_lines.append(line[6:])
-            elif line.startswith(":"):
-                pass  # comment / keepalive
-
-        if not data_lines:
-            return
-
+    def _dispatch_sse_event(self, data: str) -> None:
+        """Parse SSE event data and dispatch to callbacks."""
         try:
-            event = json.loads("".join(data_lines))
+            event = json.loads(data)
         except json.JSONDecodeError:
             return
 
@@ -259,33 +245,10 @@ class HttpTransport:
             cbs = list((self._sse_callbacks.get(channel) or {}).values())
 
         for cb in cbs:
-            # Don't let subscriber errors kill the SSE loop
             with contextlib.suppress(Exception):
                 cb(msg)
 
-    # ── HTTP Helpers ──────────────────────────────────────────────
-
-    def _auth_headers(self) -> dict[str, str]:
-        """Return auth headers if a token is configured."""
-        if self._token:
-            return {"Authorization": f"Bearer {self._token}"}
-        return {}
-
-    def _get(self, path: str, params: dict[str, str] | None = None) -> dict:
-        url = f"{self._base_url}{path}"
-        if params:
-            url += "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers=self._auth_headers())
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-            return json.loads(resp.read())
-
-    def _post(self, path: str, body: dict) -> dict:
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body, ensure_ascii=False).encode()
-        headers = {"Content-Type": "application/json", **self._auth_headers()}
-        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-            return json.loads(resp.read())
+    # ── Helpers ────────────────────────────────────────────────────
 
     @staticmethod
     def _dict_to_msg(d: dict) -> Message:
@@ -300,4 +263,5 @@ class HttpTransport:
         )
 
     def __repr__(self) -> str:
-        return f"HttpTransport({self._base_url!r})"
+        auth = "auth" if self._token else "no-auth"
+        return f"HttpTransport({self._base_url!r}, {auth})"
