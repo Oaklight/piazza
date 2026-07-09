@@ -6,6 +6,23 @@ hide:
 
 ## 未发布
 
+## 0.2.3 (2026-07-09)
+
+### 新增
+
+- **HTTPS 支持** — HttpTransport 现在支持 HTTPS（之前仅 HTTP）
+- **`token` 参数** — `PiazzaClient("https://...", "agent-id", token="pzt-xxx")` 实现远程认证接入
+- **`--api-token` CLI 标志** — 所有 `piazza client` 子命令支持 Bearer token 认证
+
+### 变更
+
+- **Vendor zerodep 模块** — `httpclient` (v0.4.4) 和 `sse` (v0.3.2) 替代 HttpTransport 中的手写 HTTP/SSE 代码
+- SSE 流使用 `SSEClient`，支持自动重连和 W3C 标准事件解析
+
+### 修复
+
+- Admin 登录界面现在在认证前隐藏页面内容（无未认证 dashboard 闪烁）
+
 ## 0.2.1 (2026-07-08)
 
 ### 新增
