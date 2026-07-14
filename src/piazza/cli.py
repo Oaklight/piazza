@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import signal
 import sys
 import threading
@@ -262,21 +261,24 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     Args:
         args: Parsed arguments namespace.
     """
+    import logging
+
+    from piazza._vendor.structlog import configure, get_logger
+
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    logger = logging.getLogger("piazza")
+    configure(logger_factory=lambda *a: logging.getLogger(a[0] if a else "piazza"))
+    logger = get_logger("piazza")
 
     # --no-auth + --remote is dangerous — refuse to start
     if args.no_auth and args.remote:
-        logger.error(
-            "--no-auth cannot be used with --remote (would expose unauthenticated API to the network)"
-        )
+        logger.error("--no-auth cannot be used with --remote (would expose unauthenticated API)")
         sys.exit(1)
 
     bus = SQLiteBus(args.db)
-    logger.info("Bus started with database: %s", args.db)
+    logger.info("Bus started", db=args.db)
 
     # Set up token store (unless --no-auth)
     token_store = None
@@ -286,11 +288,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         token_store = TokenStore(args.db)
         token_count = len(token_store.list_tokens())
         if token_count > 0:
-            logger.info("Token auth enabled (%d token(s) configured)", token_count)
+            logger.info("Token auth enabled", token_count=token_count)
         else:
-            logger.info(
-                "Token auth ready (no tokens configured yet — API open until first token is created)"
-            )
+            logger.info("Token auth ready (no tokens yet — API open until first token created)")
 
     # Start HttpFrontend if requested
     http_frontend = None
@@ -313,7 +313,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 break
             time.sleep(0.01)
         actual_host, actual_port = http_frontend.address
-        logger.info("HttpFrontend: http://%s:%d", actual_host, actual_port)
+        logger.info("HttpFrontend started", url=f"http://{actual_host}:{actual_port}")
 
     # Start IrcFrontend if requested
     irc_frontend = None
@@ -339,11 +339,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         )
         irc_thread.start()
         logger.info(
-            "IrcFrontend: %s:%d as %s, bridging %s",
-            irc_host,
-            irc_port,
-            args.irc_nick,
-            args.irc_channels or "(no channels)",
+            "IrcFrontend started",
+            host=irc_host,
+            port=irc_port,
+            nick=args.irc_nick,
+            channels=args.irc_channels or [],
         )
 
     # Start AdminServer
@@ -358,9 +358,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         admin_kwargs["auth_password"] = args.token
 
     info = bus.start_admin(**admin_kwargs)
-    logger.info("Admin panel: %s", info.url)
+    logger.info("Admin panel", url=info.url)
     if info.password:
-        logger.info("Admin password: %s", _redact_token(info.password))
+        logger.info("Admin password", password=_redact_token(info.password))
 
     # Block until SIGINT/SIGTERM.
     # Signal handler only sets an Event — all cleanup runs in the main

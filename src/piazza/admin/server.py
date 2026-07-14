@@ -8,7 +8,6 @@ token management, and optional web UI.
 from __future__ import annotations
 
 import json
-import logging
 import socket
 import threading
 import time
@@ -17,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from piazza._vendor.httpserver import App, JSONResponse, Response
+from piazza._vendor.structlog import get_logger
 
 from .auth import SessionAuth
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from piazza.bus import Bus
     from piazza.token_store import TokenStore
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -116,9 +116,9 @@ class AdminServer:
             password=self._auth.password if self._auth else None,
         )
 
-        logger.info("Admin server started at %s", url)
+        logger.info("Admin server started", url=url)
         if self._auth:
-            logger.info("Admin password: %s", self._auth.password)
+            logger.info("Admin password", password=self._auth.password)
 
         return info
 

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
 import sqlite3
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from piazza._vendor.retry import retry
+from piazza._vendor.structlog import get_logger
 from piazza.types import Message
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS messages (
@@ -51,37 +51,24 @@ class SQLiteBackend:
         # OperationalError("database is locked"). Retry with backoff
         # so multiple processes can cold-start the same DB without
         # racing each other.
-        self._enable_wal_with_retry()
+        self._enable_wal()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
-    def _enable_wal_with_retry(
-        self,
-        attempts: int = 50,
-        base_delay: float = 0.05,
-    ) -> None:
-        """Enable WAL journal mode, retrying on transient lock errors.
-
-        Args:
-            attempts: Maximum number of attempts before giving up.
-            base_delay: Base seconds to wait between attempts; actual
-                wait is base_delay * attempt_number (linear backoff).
-        """
-        for i in range(1, attempts + 1):
-            try:
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                return
-            except sqlite3.OperationalError as e:
-                if "locked" not in str(e).lower() or i == attempts:
-                    raise
-                if i >= 10 and i % 10 == 0:
-                    logger.warning(
-                        "WAL journal_mode switch still locked after %d attempts "
-                        "(db=%s), continuing to retry...",
-                        i,
-                        self._db_path,
-                    )
-                time.sleep(base_delay * i)
+    @retry(
+        max_retries=50,
+        base_delay=0.05,
+        backoff="linear",
+        retry_on=(sqlite3.OperationalError,),
+        on_retry=lambda s: (
+            logger.warning("WAL journal_mode switch locked, retrying", attempt=s.attempt)
+            if s.attempt % 10 == 0
+            else None
+        ),
+    )
+    def _enable_wal(self) -> None:
+        """Enable WAL journal mode with automatic retry on lock contention."""
+        self._conn.execute("PRAGMA journal_mode=WAL")
 
     def store(self, message: Message) -> None:
         """Persist a message to SQLite.
