@@ -173,7 +173,7 @@ class HttpFrontend:
             if path in _PUBLIC_PATHS:
                 return None
 
-            if token_store is None or not token_store.has_tokens():
+            if token_store is None or not await asyncio.to_thread(token_store.has_tokens):
                 _auth_result_var.set(True)
                 return None
 
@@ -193,7 +193,7 @@ class HttpFrontend:
                     headers={"WWW-Authenticate": 'Bearer realm="piazza"'},
                 )
 
-            result = token_store.validate(parts[1])
+            result = await asyncio.to_thread(token_store.validate, parts[1])
             if result is False:
                 return JSONResponse(
                     {"error": "Unauthorized", "message": "Invalid or expired token"},
@@ -242,7 +242,8 @@ class HttpFrontend:
                     ),
                 }, 403
 
-            msg_id = bus.publish(
+            msg_id = await asyncio.to_thread(
+                bus.publish,
                 channel=data["channel"],
                 sender=data["sender"],
                 msg_type=data["msg_type"],
@@ -266,7 +267,7 @@ class HttpFrontend:
             except ValueError:
                 return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
 
-            msgs = bus.poll(channel, after=after, limit=limit)
+            msgs = await asyncio.to_thread(bus.poll, channel, after=after, limit=limit)
 
             auth_result = _auth_result_var.get()
             if isinstance(auth_result, str):
@@ -279,7 +280,7 @@ class HttpFrontend:
 
         @self._app.get("/v1/channels")
         async def channels(request: Request) -> dict:
-            return {"channels": bus.channels()}
+            return {"channels": await asyncio.to_thread(bus.channels)}
 
         @self._app.get("/v1/auth/check")
         async def auth_check(request: Request) -> dict:
@@ -295,7 +296,7 @@ class HttpFrontend:
             if not agent_id:
                 return {"error": "Bad Request", "message": "Query param 'agent_id' required"}, 400
 
-            msgs = bus.poll("_system:registry", limit=1000)
+            msgs = await asyncio.to_thread(bus.poll, "_system:registry", limit=1000)
             for m in reversed(msgs):
                 if m.sender == agent_id and m.msg_type == "register":
                     return {"found": True, "agent_id": agent_id, "metadata": m.metadata}
@@ -353,7 +354,13 @@ def _check_subscribe_access(auth_result: Any, ch_list: list[str]) -> tuple[dict,
 def _setup_sse_subscriptions(
     bus: Bus, ch_list: list[str], auth_result: Any
 ) -> tuple[asyncio.Queue[str | None], list[str]]:
-    """Subscribe to bus channels and return (queue, subscription_ids)."""
+    """Subscribe to bus channels and return (queue, subscription_ids).
+
+    Bus callbacks are sync and may run on any thread (the publisher's
+    thread). We use ``loop.call_soon_threadsafe`` to safely enqueue
+    data into the asyncio.Queue from non-event-loop threads.
+    """
+    loop = asyncio.get_running_loop()
     q: asyncio.Queue[str | None] = asyncio.Queue(maxsize=256)
     sub_ids: list[str] = []
 
@@ -369,7 +376,7 @@ def _setup_sse_subscriptions(
                     {"channel": target_ch, "message": _msg_to_dict(msg)}, ensure_ascii=False
                 )
                 with contextlib.suppress(asyncio.QueueFull):
-                    q.put_nowait(data)
+                    loop.call_soon_threadsafe(q.put_nowait, data)
 
             return _cb
 
