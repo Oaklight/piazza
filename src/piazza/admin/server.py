@@ -1,18 +1,23 @@
-"""HTTP server for admin panel.
+"""Admin panel HTTP server.
 
-Provides the AdminServer class for running the admin panel
-as a background HTTP server with optional authentication.
+Uses vendored zerodep ``httpserver`` — async, decorator-based routing.
+Provides dashboard stats, channel browsing, message inspection,
+token management, and optional web UI.
 """
 
+from __future__ import annotations
+
+import json
 import logging
 import socket
 import threading
 from dataclasses import dataclass
-from http.server import HTTPServer
-from typing import TYPE_CHECKING
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
+
+from piazza._vendor.httpserver import App, JSONResponse, Response
 
 from .auth import SessionAuth
-from .handlers import AdminRequestHandler
 
 if TYPE_CHECKING:
     from piazza.bus import Bus
@@ -23,14 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdminInfo:
-    """Information about the running admin server.
-
-    Attributes:
-        host: The host address the server is bound to.
-        port: The port number the server is listening on.
-        url: The full URL to access the admin panel.
-        password: The admin password (if auth is enabled).
-    """
+    """Information about the running admin server."""
 
     host: str
     port: int
@@ -41,9 +39,6 @@ class AdminInfo:
 class AdminServer:
     """Admin panel HTTP server.
 
-    Manages an HTTP server that provides a REST API and optional
-    web UI for monitoring the piazza message bus.
-
     Args:
         bus: The Bus instance to monitor.
         host: Host address to bind to. Defaults to "127.0.0.1".
@@ -52,36 +47,25 @@ class AdminServer:
         remote: Whether to allow remote connections (binds to 0.0.0.0).
         auth_password: Optional admin password. Auto-generated if remote=True.
         token_store: Optional TokenStore for agent token management.
-
-    Example:
-        >>> from piazza import Bus
-        >>> bus = Bus()
-        >>> server = AdminServer(bus, port=8741)
-        >>> info = server.start()
-        >>> print(f"Admin panel at: {info.url}")
-        >>> server.stop()
     """
 
     def __init__(
         self,
-        bus: "Bus",
+        bus: Bus,
         host: str = "127.0.0.1",
         port: int = 8741,
         serve_ui: bool = True,
         remote: bool = False,
         auth_password: str | None = None,
-        token_store: "TokenStore | None" = None,
-        # Backward compat: accept auth_token as alias for auth_password
+        token_store: TokenStore | None = None,
         auth_token: str | None = None,
     ) -> None:
         self._bus = bus
         self._host = "0.0.0.0" if remote else host
         self._port = port
         self._serve_ui = serve_ui
-        self._remote = remote
         self._token_store = token_store
 
-        # auth_token is the legacy name; auth_password takes precedence
         password = auth_password or auth_token
         if password is not None:
             self._auth: SessionAuth | None = SessionAuth(password)
@@ -90,43 +74,35 @@ class AdminServer:
         else:
             self._auth = None
 
-        self._server: HTTPServer | None = None
+        self._app = App()
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
 
+        self._setup_middleware()
+        self._setup_routes()
+
+    # ── Lifecycle ─────────────────────────────────────────────────
+
     def start(self) -> AdminInfo:
-        """Start the server in a background thread.
-
-        Returns:
-            AdminInfo containing server details including URL and password.
-
-        Raises:
-            RuntimeError: If the server is already running.
-        """
-        if self._server is not None:
+        """Start the server in a background thread."""
+        if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("Server is already running")
 
         if self._port != 0:
-            actual_port = self.find_available_port(self._host, self._port)
-            self._port = actual_port
+            self._port = self.find_available_port(self._host, self._port)
 
-        handler_class = type(
-            "BoundAdminRequestHandler",
-            (AdminRequestHandler,),
-            {
-                "bus": self._bus,
-                "auth": self._auth,
-                "serve_ui": self._serve_ui,
-                "token_store": self._token_store,
-            },
-        )
-
-        self._server = HTTPServer((self._host, self._port), handler_class)
-        # Get actual port (important when port=0, OS assigns)
-        self._port = self._server.server_address[1]
-        self._thread = threading.Thread(target=self._run_server, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="piazza-admin")
         self._thread.start()
         self._started.wait(timeout=5.0)
+
+        # Wait for App to bind and expose actual port (especially for port=0)
+        for _ in range(50):
+            if self._app.port is not None and self._app.port != 0:
+                self._port = self._app.port
+                break
+            import time
+
+            time.sleep(0.01)
 
         display_host = "localhost" if self._host in ("0.0.0.0", "127.0.0.1") else self._host
         url = f"http://{display_host}:{self._port}"
@@ -138,64 +114,45 @@ class AdminServer:
             password=self._auth.password if self._auth else None,
         )
 
-        logger.info(f"Admin server started at {url}")
+        logger.info("Admin server started at %s", url)
         if self._auth:
-            logger.info(f"Admin password: {self._auth.password}")
+            logger.info("Admin password: %s", self._auth.password)
 
         return info
 
-    def _run_server(self) -> None:
-        """Run the server (called in background thread)."""
+    def _run(self) -> None:
+        """Run the async server (called in background thread)."""
         self._started.set()
-        if self._server:
-            self._server.serve_forever()
+        self._app.run(self._host, self._port)
 
     def stop(self) -> None:
         """Stop the server. Safe to call if not running."""
-        if self._server is not None:
-            self._server.shutdown()
-            self._server.server_close()
-            self._server = None
-            self._started.clear()
-            logger.info("Admin server stopped")
-
+        self._app.shutdown()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
+            self._started.clear()
+            logger.info("Admin server stopped")
 
     def is_running(self) -> bool:
         """Check if server is running."""
-        return self._server is not None and self._started.is_set()
+        return self._thread is not None and self._started.is_set()
 
     def get_info(self) -> AdminInfo | None:
         """Get server info if running."""
         if not self.is_running():
             return None
-
         display_host = "localhost" if self._host in ("0.0.0.0", "127.0.0.1") else self._host
-        url = f"http://{display_host}:{self._port}"
-
         return AdminInfo(
             host=self._host,
             port=self._port,
-            url=url,
+            url=f"http://{display_host}:{self._port}",
             password=self._auth.password if self._auth else None,
         )
 
     @staticmethod
     def find_available_port(host: str, start_port: int) -> int:
-        """Find an available port starting from start_port.
-
-        Args:
-            host: The host address to check.
-            start_port: The port number to start searching from.
-
-        Returns:
-            An available port number.
-
-        Raises:
-            RuntimeError: If no available port found after 100 attempts.
-        """
+        """Find an available port starting from start_port."""
         for port in range(start_port, start_port + 100):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -204,5 +161,325 @@ class AdminServer:
                     return port
             except OSError:
                 continue
-
         raise RuntimeError(f"Could not find available port in range {start_port}-{start_port + 99}")
+
+    # ── Middleware ────────────────────────────────────────────────
+
+    def _setup_middleware(self) -> None:
+        """Register session-cookie auth and CORS middleware."""
+        auth = self._auth
+
+        @self._app.after_request
+        def add_cors(request: Any, response: Any) -> Any:
+            if hasattr(response, "headers"):
+                response.headers.setdefault("Access-Control-Allow-Origin", "*")
+                response.headers.setdefault(
+                    "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"
+                )
+                response.headers.setdefault(
+                    "Access-Control-Allow-Headers", "Content-Type, Authorization"
+                )
+            return response
+
+        if auth is None:
+            return
+
+        @self._app.before_request
+        def session_auth(request: Any) -> Response | None:
+            path = request.path.split("?")[0]
+
+            if path in ("/api/login", "/api/logout", "/api/auth-check"):
+                return None
+            if not path.startswith("/api/"):
+                return None
+
+            cookie_header = request.headers.get("cookie", "")
+            session_token = _extract_session_cookie(cookie_header)
+            if session_token and auth.validate_session(session_token):
+                return None
+
+            return JSONResponse(
+                {"error": "Unauthorized", "message": "Admin authentication required"},
+                status_code=401,
+            )
+
+    # ── Routes ───────────────────────────────────────────────────
+
+    def _setup_routes(self) -> None:
+        """Register all admin routes."""
+        self._setup_ui_routes()
+        self._setup_auth_routes()
+        self._setup_dashboard_routes()
+        self._setup_channel_routes()
+        self._setup_message_routes()
+        self._setup_subscription_routes()
+        self._setup_token_routes()
+
+    def _setup_ui_routes(self) -> None:
+        """Root path — serve admin HTML or API index."""
+        serve_ui = self._serve_ui
+
+        @self._app.get("/")
+        def root(request: Any) -> Response | dict:
+            if serve_ui:
+                from .static import ADMIN_HTML
+
+                return Response(ADMIN_HTML, content_type="text/html")
+            return {
+                "name": "Piazza Admin API",
+                "version": "1.0.0",
+                "endpoints": [
+                    "GET /api/stats",
+                    "GET /api/stats/throughput",
+                    "GET /api/channels",
+                    "GET /api/channels/{name}",
+                    "GET /api/messages?channel=...",
+                    "POST /api/messages",
+                    "GET /api/subscriptions",
+                    "GET /api/tokens",
+                ],
+            }
+
+    def _setup_auth_routes(self) -> None:
+        """Login, logout, auth-check routes."""
+        auth = self._auth
+
+        @self._app.get("/api/auth-check")
+        def auth_check(request: Any) -> dict:
+            if auth is None:
+                return {"authenticated": True, "required": False}
+            cookie_header = request.headers.get("cookie", "")
+            session_token = _extract_session_cookie(cookie_header)
+            authenticated = bool(session_token and auth.validate_session(session_token))
+            return {"authenticated": authenticated, "required": True}
+
+        @self._app.post("/api/login")
+        def login(request: Any) -> Response | dict | tuple:
+            if auth is None:
+                return {"ok": True}
+            data = request.json()
+            password = data.get("password", "")
+
+            client_ip = request.client_addr[0]
+            wait = auth._check_rate_limit(client_ip)
+            if wait > 0:
+                return {"error": "Too many attempts", "retry_after": round(wait, 1)}, 429
+
+            if not auth.check_password(password):
+                auth._record_failure(client_ip)
+                return {"error": "Invalid password"}, 401
+
+            auth._clear_failures(client_ip)
+            session_token = auth.create_session()
+            return Response(
+                body=json.dumps({"ok": True}),
+                content_type="application/json; charset=utf-8",
+                headers={
+                    "Set-Cookie": f"{SessionAuth.COOKIE_NAME}={session_token}; HttpOnly; SameSite=Strict; Path=/",
+                },
+            )
+
+        @self._app.post("/api/logout")
+        def logout(request: Any) -> Response:
+            if auth:
+                cookie_header = request.headers.get("cookie", "")
+                session_token = _extract_session_cookie(cookie_header)
+                if session_token:
+                    auth.revoke_session(session_token)
+            return Response(
+                body=json.dumps({"ok": True}),
+                content_type="application/json; charset=utf-8",
+                headers={
+                    "Set-Cookie": f"{SessionAuth.COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+                },
+            )
+
+    def _setup_dashboard_routes(self) -> None:
+        """Stats and throughput routes."""
+        bus = self._bus
+
+        @self._app.get("/api/stats")
+        def stats(request: Any) -> dict:
+            s = bus.backend.get_stats()
+            s["active_subscriptions"] = sum(len(v) for v in bus.subscription_counts().values())
+            return s
+
+        @self._app.get("/api/stats/throughput")
+        def throughput(request: Any) -> dict:
+            window = 60
+            timestamps = bus.backend.query_recent_timestamps(window)
+            now = datetime.now(timezone.utc)
+            buckets = []
+            for i in range(window):
+                t = now - timedelta(seconds=window - 1 - i)
+                t_str = t.strftime("%H:%M:%S")
+                count = sum(
+                    1
+                    for ts in timestamps
+                    if abs((t - datetime.fromisoformat(ts)).total_seconds()) < 1
+                )
+                buckets.append({"time": t_str, "count": count})
+            return {"window_seconds": window, "buckets": buckets}
+
+    def _setup_channel_routes(self) -> None:
+        """Channel listing and detail routes."""
+        bus = self._bus
+
+        @self._app.get("/api/channels")
+        def channels(request: Any) -> dict:
+            result = []
+            sub_counts = bus.subscription_counts()
+            for ch_name in bus.channels():
+                msgs = bus.poll(ch_name, limit=1000)
+                senders = {m.sender for m in msgs}
+                last_time = msgs[-1].timestamp if msgs else None
+                result.append(
+                    {
+                        "name": ch_name,
+                        "message_count": len(msgs),
+                        "sender_count": len(senders),
+                        "subscription_count": len(sub_counts.get(ch_name, [])),
+                        "last_message_time": last_time,
+                    }
+                )
+            return {"channels": result}
+
+        @self._app.get("/api/channels/<name>")
+        def channel_detail(request: Any, name: str) -> dict | tuple:
+            msgs = bus.poll(name, limit=1000)
+            if not msgs:
+                return {"error": "Not Found", "message": f"Channel '{name}' not found"}, 404
+            senders = sorted({m.sender for m in msgs})
+            type_counts: dict[str, int] = {}
+            for m in msgs:
+                type_counts[m.msg_type] = type_counts.get(m.msg_type, 0) + 1
+            return {
+                "name": name,
+                "message_count": len(msgs),
+                "senders": senders,
+                "msg_types": [{"msg_type": t, "count": c} for t, c in type_counts.items()],
+                "last_message_time": msgs[-1].timestamp if msgs else None,
+            }
+
+    def _setup_message_routes(self) -> None:
+        """Message query and publish routes."""
+        bus = self._bus
+
+        @self._app.get("/api/messages")
+        def get_messages(request: Any) -> dict | tuple:
+            channel = (request.query_params.get("channel") or [None])[0]
+            if not channel:
+                return {"error": "Bad Request", "message": "Query param 'channel' required"}, 400
+            sender = (request.query_params.get("sender") or [None])[0]
+            msg_type = (request.query_params.get("msg_type") or [None])[0]
+            limit = int((request.query_params.get("limit") or ["100"])[0])
+
+            msgs = bus.backend.query_all(
+                channel=channel, sender=sender, msg_type=msg_type, limit=limit
+            )
+            return {
+                "count": len(msgs),
+                "messages": [_msg_dict(m) for m in msgs],
+            }
+
+        @self._app.post("/api/messages")
+        def publish_message(request: Any) -> dict | tuple:
+            data = request.json()
+            required = ("channel", "sender", "msg_type", "payload")
+            missing = [f for f in required if f not in data]
+            if missing:
+                return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
+            msg_id = bus.publish(
+                channel=data["channel"],
+                sender=data["sender"],
+                msg_type=data["msg_type"],
+                payload=data["payload"],
+                metadata=data.get("metadata"),
+            )
+            return {"success": True, "message_id": msg_id}
+
+    def _setup_subscription_routes(self) -> None:
+        """Subscription listing route."""
+        bus = self._bus
+
+        @self._app.get("/api/subscriptions")
+        def subscriptions(request: Any) -> dict:
+            counts = bus.subscription_counts()
+            ch_list = [
+                {"channel": ch, "subscription_ids": ids, "count": len(ids)}
+                for ch, ids in counts.items()
+            ]
+            return {"total": sum(c["count"] for c in ch_list), "channels": ch_list}
+
+    def _setup_token_routes(self) -> None:
+        """Token CRUD routes."""
+        token_store = self._token_store
+
+        @self._app.get("/api/tokens")
+        def list_tokens(request: Any) -> dict:
+            if token_store is None:
+                return {"tokens": [], "enabled": False}
+            return {"tokens": token_store.list_tokens(), "enabled": True}
+
+        @self._app.post("/api/tokens")
+        def create_token(request: Any) -> dict | tuple:
+            if token_store is None:
+                return {
+                    "error": "Service Unavailable",
+                    "message": "Token store not configured",
+                }, 503
+            data = request.json() if request.body else {}
+            entry = token_store.create_token(
+                agent_id=data.get("agent_id"), label=data.get("label", "")
+            )
+            return {"ok": True, "token": entry}, 201
+
+        @self._app.delete("/api/tokens/<token_id>")
+        def delete_token(request: Any, token_id: str) -> dict | tuple:
+            if token_store is None:
+                return {
+                    "error": "Service Unavailable",
+                    "message": "Token store not configured",
+                }, 503
+            if token_store.delete_token(token_id):
+                return {"ok": True, "deleted": token_id}
+            return {"error": "Not Found", "message": f"Token '{token_id}' not found"}, 404
+
+        @self._app.post("/api/tokens/<token_id>/rotate")
+        def rotate_token(request: Any, token_id: str) -> dict | tuple:
+            if token_store is None:
+                return {
+                    "error": "Service Unavailable",
+                    "message": "Token store not configured",
+                }, 503
+            result = token_store.rotate_token(token_id)
+            if result is None:
+                return {"error": "Not Found", "message": f"Token '{token_id}' not found"}, 404
+            return {"ok": True, "token": result}
+
+
+# ── Helpers ──────────────────────────────────────────────────────
+
+
+def _extract_session_cookie(cookie_header: str) -> str | None:
+    """Extract piazza_session cookie value from a Cookie header string."""
+    if not cookie_header:
+        return None
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if part.startswith(f"{SessionAuth.COOKIE_NAME}="):
+            return part[len(SessionAuth.COOKIE_NAME) + 1 :]
+    return None
+
+
+def _msg_dict(m: Any) -> dict:
+    """Serialize a Message to a dict."""
+    return {
+        "id": m.id,
+        "channel": m.channel,
+        "sender": m.sender,
+        "msg_type": m.msg_type,
+        "payload": m.payload,
+        "timestamp": m.timestamp,
+        "metadata": m.metadata,
+    }
