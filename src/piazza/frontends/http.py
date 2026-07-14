@@ -284,7 +284,9 @@ class HttpFrontend:
 
         @self._app.get("/v1/auth/check")
         async def auth_check(request: Request) -> dict:
-            has_tokens = bool(self._token_store and self._token_store.has_tokens())
+            has_tokens = bool(
+                self._token_store and await asyncio.to_thread(self._token_store.has_tokens)
+            )
             return {
                 "require_auth": bus.require_auth,
                 "token_auth_enabled": has_tokens,
@@ -367,6 +369,10 @@ def _setup_sse_subscriptions(
     for ch in ch_list:
 
         def _make_callback(target_ch: str) -> Any:
+            def _safe_enqueue(data: str) -> None:
+                with contextlib.suppress(asyncio.QueueFull):
+                    q.put_nowait(data)
+
             def _cb(msg: Message) -> None:
                 if isinstance(auth_result, str) and not _agent_involved(
                     auth_result, msg.channel, msg.sender
@@ -375,8 +381,7 @@ def _setup_sse_subscriptions(
                 data = json.dumps(
                     {"channel": target_ch, "message": _msg_to_dict(msg)}, ensure_ascii=False
                 )
-                with contextlib.suppress(asyncio.QueueFull):
-                    loop.call_soon_threadsafe(q.put_nowait, data)
+                loop.call_soon_threadsafe(_safe_enqueue, data)
 
             return _cb
 
