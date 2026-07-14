@@ -11,6 +11,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -100,9 +101,10 @@ class AdminServer:
             if self._app.port is not None and self._app.port != 0:
                 self._port = self._app.port
                 break
-            import time
-
             time.sleep(0.01)
+        else:
+            if self._port == 0:
+                logger.warning("Server did not report bound port within 500ms")
 
         display_host = "localhost" if self._host in ("0.0.0.0", "127.0.0.1") else self._host
         url = f"http://{display_host}:{self._port}"
@@ -166,28 +168,25 @@ class AdminServer:
     # ── Middleware ────────────────────────────────────────────────
 
     def _setup_middleware(self) -> None:
-        """Register session-cookie auth and CORS middleware."""
+        """Register CORS + session-cookie auth middleware."""
         auth = self._auth
-
-        @self._app.after_request
-        def add_cors(request: Any, response: Any) -> Any:
-            if hasattr(response, "headers"):
-                response.headers.setdefault("Access-Control-Allow-Origin", "*")
-                response.headers.setdefault(
-                    "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"
-                )
-                response.headers.setdefault(
-                    "Access-Control-Allow-Headers", "Content-Type, Authorization"
-                )
-            return response
-
-        if auth is None:
-            return
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        }
 
         @self._app.before_request
-        def session_auth(request: Any) -> Response | None:
-            path = request.path.split("?")[0]
+        def cors_and_auth(request: Any) -> Response | None:
+            # CORS preflight
+            if request.method == "OPTIONS":
+                return Response(status_code=204, headers=cors_headers.copy())
 
+            # No auth configured → pass through
+            if auth is None:
+                return None
+
+            path = request.path.split("?")[0]
             if path in ("/api/login", "/api/logout", "/api/auth-check"):
                 return None
             if not path.startswith("/api/"):
@@ -201,7 +200,15 @@ class AdminServer:
             return JSONResponse(
                 {"error": "Unauthorized", "message": "Admin authentication required"},
                 status_code=401,
+                headers=cors_headers.copy(),
             )
+
+        @self._app.after_request
+        def add_cors(request: Any, response: Any) -> Any:
+            if hasattr(response, "headers"):
+                for k, v in cors_headers.items():
+                    response.headers.setdefault(k, v)
+            return response
 
     # ── Routes ───────────────────────────────────────────────────
 
