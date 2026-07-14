@@ -137,8 +137,8 @@ class Bus:
 
         self._backend.store(msg)
 
-        # Notify in-process subscribers
-        for callback in self._subs.get(channel, {}).values():
+        # Notify in-process subscribers (snapshot to avoid mutation during iteration)
+        for callback in list(self._subs.get(channel, {}).values()):
             callback(msg)
 
         return msg_id
