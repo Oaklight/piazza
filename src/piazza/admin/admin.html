@@ -473,6 +473,52 @@ tr:hover { background: var(--accent-light); }
     word-break: break-all; background: #FFF3E0; padding: 8px; border-radius: 4px;
     margin-bottom: 8px;
 }
+/* ============== Channel Tree View ============== */
+.ch-toolbar {
+    display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;
+}
+.ch-toolbar input {
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 0.8rem; background: var(--bg-secondary); outline: none; min-width: 180px;
+}
+.ch-toolbar input:focus { border-color: var(--accent); }
+.ch-toolbar select {
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 0.8rem; background: var(--bg-secondary);
+}
+.ch-view-btns { display: flex; gap: 2px; margin-left: auto; }
+.ch-view-btns button {
+    padding: 4px 10px; border: 1px solid var(--border); background: var(--bg-secondary);
+    font-size: 0.75rem; cursor: pointer; color: var(--text-secondary);
+}
+.ch-view-btns button:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.ch-view-btns button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.ch-view-btns button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tree-group {
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;
+}
+.tree-group-header {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+    cursor: pointer; user-select: none; font-size: 0.875rem; font-weight: 600;
+}
+.tree-group-header:hover { background: var(--accent-light); }
+.tree-group-header .count { color: var(--text-secondary); font-weight: 400; font-size: 0.8rem; }
+.tree-group-body { display: none; }
+.tree-group-body.open { display: block; }
+.tree-group-body table { width: 100%; border-collapse: collapse; }
+.tree-group-body td { padding: 8px 16px 8px 40px; font-size: 0.85rem; border-top: 1px solid var(--border); }
+.tree-group-body tr:hover { background: var(--accent-light); }
+.agent-card {
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 16px; margin-bottom: 12px;
+}
+.agent-card-header {
+    font-size: 0.95rem; font-weight: 600; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+}
+.agent-section-title { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin: 8px 0 4px; }
+
 .btn-danger { background: var(--error); color: #fff; }
 .btn-danger:hover { background: #A33636; }
 .btn-sm-action { padding: 3px 8px; font-size: 0.7rem; margin: 0 2px; }
@@ -563,14 +609,29 @@ tr:hover { background: var(--accent-light); }
 
     <!-- Channels Tab -->
     <div class="tab-content" id="tab-channels">
-        <div class="table-container">
-            <table>
-                <thead><tr>
-                    <th></th><th>Channel</th><th>Messages</th><th>Senders</th><th>Subscriptions</th><th>Last Message</th>
-                </tr></thead>
-                <tbody id="channelList"></tbody>
-            </table>
+        <div class="ch-toolbar">
+            <input id="chSearch" type="text" placeholder="Search channels..." oninput="renderChannelView()">
+            <select id="chTypeFilter" onchange="renderChannelView()">
+                <option value="all">All types</option>
+                <option value="dm">DM</option>
+                <option value="notebook">Notebook</option>
+                <option value="memory">Memory</option>
+                <option value="broadcast">Broadcast</option>
+                <option value="custom">Custom</option>
+            </select>
+            <select id="chAgentFilter" onchange="renderChannelView()">
+                <option value="">All agents</option>
+            </select>
+            <label style="font-size:0.75rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px">
+                <input type="checkbox" id="chShowSystem" onchange="renderChannelView()"> System
+            </label>
+            <div class="ch-view-btns">
+                <button class="active" onclick="setChannelView('tree')">Tree</button>
+                <button onclick="setChannelView('flat')">Flat</button>
+                <button onclick="setChannelView('agent')">Agent</button>
+            </div>
         </div>
+        <div id="channelViewContainer"></div>
     </div>
 
     <!-- Messages Tab -->
@@ -926,78 +987,157 @@ function drawThroughputChart(buckets) {
 }
 
 /* ============== Channels Tab ============== */
-const expandedChannels = new Set();
+let channelData = [];
+let channelView = 'tree';
+const expandedGroups = new Set();
+
+function _chPrefix(name) {
+    const i = name.indexOf(':');
+    return i > 0 ? name.substring(0, i) : '';
+}
+
+function _chType(name) {
+    const p = _chPrefix(name);
+    if (p === '_system') return 'system';
+    if (['dm','notebook','memory','broadcast'].includes(p)) return p;
+    return 'custom';
+}
+
+function _chAgents(ch) {
+    const parts = ch.name.split(':').slice(1);
+    return parts.length ? parts : [];
+}
+
+function _allAgents(channels) {
+    const agents = new Set();
+    for (const ch of channels) {
+        for (const a of _chAgents(ch)) agents.add(a);
+    }
+    return [...agents].sort();
+}
+
+function _filterChannels() {
+    const search = document.getElementById('chSearch').value.toLowerCase();
+    const typeFilter = document.getElementById('chTypeFilter').value;
+    const agentFilter = document.getElementById('chAgentFilter').value;
+    const showSystem = document.getElementById('chShowSystem').checked;
+    return channelData.filter(ch => {
+        if (!showSystem && _chType(ch.name) === 'system') return false;
+        if (typeFilter !== 'all' && _chType(ch.name) !== typeFilter) return false;
+        if (agentFilter && !ch.name.split(':').includes(agentFilter)) return false;
+        if (search && !ch.name.toLowerCase().includes(search)) return false;
+        return true;
+    });
+}
+
+function _chRow(ch) {
+    return `<tr>
+        <td><strong>${esc(ch.name)}</strong></td>
+        <td>${ch.message_count}</td><td>${ch.sender_count}</td>
+        <td>${ch.subscription_count}</td>
+        <td style="color:var(--text-secondary);font-size:0.8rem">${formatTime(ch.last_message_time)}</td>
+    </tr>`;
+}
+
+function _renderTree(filtered) {
+    const groups = {};
+    const ungrouped = [];
+    for (const ch of filtered) {
+        const p = _chPrefix(ch.name);
+        if (p) {
+            (groups[p] = groups[p] || []).push(ch);
+        } else {
+            ungrouped.push(ch);
+        }
+    }
+    const order = ['dm','notebook','memory','broadcast','_system'];
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    let html = '';
+    for (const prefix of sortedKeys) {
+        const items = groups[prefix];
+        const isOpen = expandedGroups.has(prefix);
+        html += `<div class="tree-group">
+            <div class="tree-group-header" onclick="toggleTreeGroup('${prefix}')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;${isOpen ? 'transform:rotate(90deg)' : ''}"><polyline points="9 18 15 12 9 6"/></svg>
+                <span>${esc(prefix)}</span>
+                <span class="count">(${items.length})</span>
+            </div>
+            <div class="tree-group-body${isOpen ? ' open' : ''}">
+                <table>${items.map(_chRow).join('')}</table>
+            </div>
+        </div>`;
+    }
+    if (ungrouped.length) {
+        html += `<div class="table-container"><table>
+            <thead><tr><th>Channel</th><th>Messages</th><th>Senders</th><th>Subs</th><th>Last</th></tr></thead>
+            <tbody>${ungrouped.map(_chRow).join('')}</tbody>
+        </table></div>`;
+    }
+    return html || '<div style="color:var(--text-secondary);text-align:center;padding:40px">No channels match filters</div>';
+}
+
+function _renderFlat(filtered) {
+    if (!filtered.length) return '<div style="color:var(--text-secondary);text-align:center;padding:40px">No channels match filters</div>';
+    return `<div class="table-container"><table>
+        <thead><tr><th>Channel</th><th>Messages</th><th>Senders</th><th>Subs</th><th>Last</th></tr></thead>
+        <tbody>${filtered.map(_chRow).join('')}</tbody>
+    </table></div>`;
+}
+
+function _renderAgentView(filtered) {
+    const agents = _allAgents(channelData);
+    if (!agents.length) return '<div style="color:var(--text-secondary);text-align:center;padding:40px">No agents found</div>';
+    return agents.map(agent => {
+        const owned = filtered.filter(ch => ch.name === `notebook:${agent}` || ch.name === `memory:${agent}`);
+        const participated = filtered.filter(ch => ch.name.split(':').includes(agent) && !owned.includes(ch));
+        if (!owned.length && !participated.length) return '';
+        return `<div class="agent-card">
+            <div class="agent-card-header"><span class="badge">${esc(agent)}</span></div>
+            ${owned.length ? `<div class="agent-section-title">Owned</div>
+                <table>${owned.map(_chRow).join('')}</table>` : ''}
+            ${participated.length ? `<div class="agent-section-title">Participated</div>
+                <table>${participated.map(_chRow).join('')}</table>` : ''}
+        </div>`;
+    }).join('') || '<div style="color:var(--text-secondary);text-align:center;padding:40px">No agents match filters</div>';
+}
+
+function renderChannelView() {
+    const filtered = _filterChannels();
+    const container = document.getElementById('channelViewContainer');
+    if (channelView === 'tree') container.innerHTML = _renderTree(filtered);
+    else if (channelView === 'flat') container.innerHTML = _renderFlat(filtered);
+    else container.innerHTML = _renderAgentView(filtered);
+}
+
+function setChannelView(view) {
+    channelView = view;
+    document.querySelectorAll('.ch-view-btns button').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.ch-view-btns button:nth-child(${view === 'tree' ? 1 : view === 'flat' ? 2 : 3})`).classList.add('active');
+    renderChannelView();
+}
+
+function toggleTreeGroup(prefix) {
+    if (expandedGroups.has(prefix)) expandedGroups.delete(prefix);
+    else expandedGroups.add(prefix);
+    renderChannelView();
+}
 
 async function loadChannels() {
     try {
         const data = await api.getChannels();
-        const tbody = document.getElementById('channelList');
-        tbody.innerHTML = data.channels.map(ch => {
-            const isOpen = expandedChannels.has(ch.name);
-            return `
-            <tr class="clickable" onclick="toggleChannelDetail('${esc(ch.name)}', this)">
-                <td style="width:30px">
-                    <svg class="ch-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;${isOpen ? 'transform:rotate(90deg)' : ''}">
-                        <polyline points="9 18 15 12 9 6"/>
-                    </svg>
-                </td>
-                <td><strong>${esc(ch.name)}</strong></td>
-                <td>${ch.message_count.toLocaleString()}</td>
-                <td>${ch.sender_count}</td>
-                <td>${ch.subscription_count}</td>
-                <td style="color:var(--text-secondary);font-size:0.8rem">${formatTime(ch.last_message_time)}</td>
-            </tr>
-            <tr class="ch-detail-row" id="ch-detail-${esc(ch.name)}" style="display:${isOpen ? 'table-row' : 'none'}">
-                <td colspan="6">
-                    <div class="channel-detail visible" id="ch-detail-content-${esc(ch.name)}">
-                        <div style="color:var(--text-secondary);font-size:0.8rem">Loading...</div>
-                    </div>
-                </td>
-            </tr>`;
-        }).join('');
-        // Re-fetch details for expanded channels
-        for (const name of expandedChannels) {
-            _loadChannelDetail(name);
-        }
+        channelData = data.channels;
+        // Populate agent filter dropdown
+        const agentSelect = document.getElementById('chAgentFilter');
+        const currentAgent = agentSelect.value;
+        const agents = _allAgents(channelData);
+        agentSelect.innerHTML = '<option value="">All agents</option>' +
+            agents.map(a => `<option value="${esc(a)}" ${a === currentAgent ? 'selected' : ''}>${esc(a)}</option>`).join('');
+        renderChannelView();
     } catch (e) {
         console.error('Channels load error:', e);
-    }
-}
-
-async function _loadChannelDetail(name) {
-    try {
-        const ch = await api.getChannel(name);
-        const content = document.getElementById('ch-detail-content-' + name);
-        if (!content) return;
-        content.innerHTML = `
-            <div class="detail-grid">
-                <div>
-                    <div class="detail-section-title">Senders</div>
-                    <div>${ch.senders.map(s => `<span class="badge">${esc(s)}</span>`).join('')}</div>
-                </div>
-                <div>
-                    <div class="detail-section-title">Message Types</div>
-                    <div>${ch.msg_types.map(t => `<span class="badge">${esc(t.msg_type)}</span> <span class="badge badge-count">${t.count}</span> `).join('')}</div>
-                </div>
-            </div>
-        `;
-    } catch (e) {
-        console.error('Channel detail error:', e);
-    }
-}
-
-async function toggleChannelDetail(name, row) {
-    const detailRow = document.getElementById('ch-detail-' + name);
-    const chevron = row.querySelector('.ch-chevron');
-    if (detailRow.style.display === 'none') {
-        expandedChannels.add(name);
-        detailRow.style.display = 'table-row';
-        chevron.style.transform = 'rotate(90deg)';
-        _loadChannelDetail(name);
-    } else {
-        expandedChannels.delete(name);
-        detailRow.style.display = 'none';
-        chevron.style.transform = 'rotate(0deg)';
     }
 }
 
