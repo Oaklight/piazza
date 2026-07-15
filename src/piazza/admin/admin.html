@@ -926,14 +926,18 @@ function drawThroughputChart(buckets) {
 }
 
 /* ============== Channels Tab ============== */
+const expandedChannels = new Set();
+
 async function loadChannels() {
     try {
         const data = await api.getChannels();
         const tbody = document.getElementById('channelList');
-        tbody.innerHTML = data.channels.map(ch => `
+        tbody.innerHTML = data.channels.map(ch => {
+            const isOpen = expandedChannels.has(ch.name);
+            return `
             <tr class="clickable" onclick="toggleChannelDetail('${esc(ch.name)}', this)">
                 <td style="width:30px">
-                    <svg class="ch-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s">
+                    <svg class="ch-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;${isOpen ? 'transform:rotate(90deg)' : ''}">
                         <polyline points="9 18 15 12 9 6"/>
                     </svg>
                 </td>
@@ -943,16 +947,42 @@ async function loadChannels() {
                 <td>${ch.subscription_count}</td>
                 <td style="color:var(--text-secondary);font-size:0.8rem">${formatTime(ch.last_message_time)}</td>
             </tr>
-            <tr class="ch-detail-row" id="ch-detail-${esc(ch.name)}" style="display:none">
+            <tr class="ch-detail-row" id="ch-detail-${esc(ch.name)}" style="display:${isOpen ? 'table-row' : 'none'}">
                 <td colspan="6">
                     <div class="channel-detail visible" id="ch-detail-content-${esc(ch.name)}">
                         <div style="color:var(--text-secondary);font-size:0.8rem">Loading...</div>
                     </div>
                 </td>
-            </tr>
-        `).join('');
+            </tr>`;
+        }).join('');
+        // Re-fetch details for expanded channels
+        for (const name of expandedChannels) {
+            _loadChannelDetail(name);
+        }
     } catch (e) {
         console.error('Channels load error:', e);
+    }
+}
+
+async function _loadChannelDetail(name) {
+    try {
+        const ch = await api.getChannel(name);
+        const content = document.getElementById('ch-detail-content-' + name);
+        if (!content) return;
+        content.innerHTML = `
+            <div class="detail-grid">
+                <div>
+                    <div class="detail-section-title">Senders</div>
+                    <div>${ch.senders.map(s => `<span class="badge">${esc(s)}</span>`).join('')}</div>
+                </div>
+                <div>
+                    <div class="detail-section-title">Message Types</div>
+                    <div>${ch.msg_types.map(t => `<span class="badge">${esc(t.msg_type)}</span> <span class="badge badge-count">${t.count}</span> `).join('')}</div>
+                </div>
+            </div>
+        `;
+    } catch (e) {
+        console.error('Channel detail error:', e);
     }
 }
 
@@ -960,27 +990,12 @@ async function toggleChannelDetail(name, row) {
     const detailRow = document.getElementById('ch-detail-' + name);
     const chevron = row.querySelector('.ch-chevron');
     if (detailRow.style.display === 'none') {
+        expandedChannels.add(name);
         detailRow.style.display = 'table-row';
         chevron.style.transform = 'rotate(90deg)';
-        try {
-            const ch = await api.getChannel(name);
-            const content = document.getElementById('ch-detail-content-' + name);
-            content.innerHTML = `
-                <div class="detail-grid">
-                    <div>
-                        <div class="detail-section-title">Senders</div>
-                        <div>${ch.senders.map(s => `<span class="badge">${esc(s)}</span>`).join('')}</div>
-                    </div>
-                    <div>
-                        <div class="detail-section-title">Message Types</div>
-                        <div>${ch.msg_types.map(t => `<span class="badge">${esc(t.msg_type)}</span> <span class="badge badge-count">${t.count}</span> `).join('')}</div>
-                    </div>
-                </div>
-            `;
-        } catch (e) {
-            console.error('Channel detail error:', e);
-        }
+        _loadChannelDetail(name);
     } else {
+        expandedChannels.delete(name);
         detailRow.style.display = 'none';
         chevron.style.transform = 'rotate(0deg)';
     }
