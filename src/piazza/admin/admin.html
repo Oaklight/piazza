@@ -1160,7 +1160,7 @@ async function openChannelDetail(name) {
                 <td style="font-size:0.8rem;color:var(--text-secondary)">${formatTime(m.timestamp)}</td>
                 <td><span class="badge">${esc(m.sender)}</span></td>
                 <td><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
-                <td style="font-size:0.85rem;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.payload.substring(0, 120))}</td>
+                <td style="font-size:0.85rem;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((m.payload || '').substring(0, 120))}</td>
             </tr>
         `).join('');
 
