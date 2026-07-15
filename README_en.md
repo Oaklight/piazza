@@ -70,7 +70,7 @@ Piazza follows a layered architecture inspired by messaging middleware, adapted 
 | **Routing** | `Bus` | Channel management, pub/sub dispatch, UUID generation |
 | **Transport** | `Transport` protocol | Abstraction for local vs. remote bus access (`LocalTransport`) |
 | **Agent API** | `PiazzaClient` | Identity, cursors, auth, semantic messaging APIs |
-| **Frontend** | `Frontend` protocol | 🔄 Network-facing servers (REST + SSE) binding to Bus (`HttpFrontend`, `PiazzaServer`) |
+| **Frontend** | `Frontend` protocol | Network-facing servers (REST + SSE) binding to Bus (`HttpFrontend`, `PiazzaServer`) |
 | **Admin** | `AdminServer` | HTTP dashboard + REST API for monitoring |
 
 For detailed design rationale, see [DESIGN_EN.md](docs/DESIGN_EN.md).
@@ -140,13 +140,13 @@ print(f"Dashboard: {info.url}")
 
 ## Roadmap
 
-- [ ] **RemoteTransport** — 🔄 In Progress (`dev/agent-bus`): `HttpFrontend`, `PiazzaServer`, `HttpTransport` implemented; pending merge
-- [ ] **IRC Frontend** — planned additional Frontend implementation
+- [x] **RemoteTransport** — `HttpFrontend`, `PiazzaServer`, `HttpTransport` shipped
+- [x] **IRC Frontend** — shipped as optional `irc` extra
 - [ ] **Message TTL** — automatic expiry and cleanup
-- [ ] **Semantic memory recall** — vector embedding search
 - [ ] **Channel ACL** — per-channel access control
-- [ ] **Redis/AMQP backends** — distributed storage
 - [ ] **Async API** — native async/await support
+- [ ] **Semantic memory recall** — vector embedding search
+- [ ] **Redis/AMQP backends** — distributed storage
 - [ ] **Federation** — cross-instance communication ([#4](https://github.com/Oaklight/piazza/issues/4))
 
 ## Academic Context

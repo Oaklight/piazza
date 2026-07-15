@@ -70,7 +70,7 @@ Piazza 采用分层架构，灵感来自消息中间件，针对 AI 智能体工
 | **路由层** | `Bus` | 通道管理、发布/订阅分发、UUID 生成 |
 | **传输层** | `Transport` 协议 | 本地 vs 远程总线访问的抽象（`LocalTransport`） |
 | **智能体 API** | `PiazzaClient` | 身份、游标、认证、语义化消息 API |
-| **前端层** | `Frontend` 协议 | 🔄 网络服务层（REST + SSE），挂载到 Bus（`HttpFrontend`、`PiazzaServer`） |
+| **前端层** | `Frontend` 协议 | 网络服务层（REST + SSE），挂载到 Bus（`HttpFrontend`、`PiazzaServer`） |
 | **管理层** | `AdminServer` | HTTP 仪表板 + REST API 监控 |
 
 详细设计理念请参阅 [DESIGN.md](docs/DESIGN.md)。
@@ -140,13 +140,13 @@ print(f"仪表板: {info.url}")
 
 ## 路线图
 
-- [ ] **RemoteTransport** — 🔄 开发中（`dev/agent-bus`）：`HttpFrontend`、`PiazzaServer`、`HttpTransport` 已实现，待合入
-- [ ] **IRC Frontend** — 计划中的额外 Frontend 实现
+- [x] **RemoteTransport** — `HttpFrontend`、`PiazzaServer`、`HttpTransport` 已发布
+- [x] **IRC Frontend** — 已发布，作为可选依赖 `irc`
 - [ ] **消息 TTL** — 自动过期与清理
-- [ ] **语义化记忆检索** — 向量嵌入搜索
 - [ ] **通道 ACL** — 按通道的访问控制
-- [ ] **Redis/AMQP 后端** — 分布式存储
 - [ ] **异步 API** — 原生 async/await 支持
+- [ ] **语义化记忆检索** — 向量嵌入搜索
+- [ ] **Redis/AMQP 后端** — 分布式存储
 - [ ] **联邦** — 跨实例通信（[#4](https://github.com/Oaklight/piazza/issues/4)）
 
 ## 学术背景
