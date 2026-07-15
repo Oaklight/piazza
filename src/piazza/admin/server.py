@@ -117,8 +117,6 @@ class AdminServer:
         )
 
         logger.info("Admin server started", url=url)
-        if self._auth:
-            logger.info("Admin password", password=self._auth.password)
 
         return info
 
