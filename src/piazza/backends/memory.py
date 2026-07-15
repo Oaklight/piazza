@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -11,11 +12,12 @@ from piazza.types import Message
 class MemoryBackend:
     """In-memory message backend for testing.
 
-    Messages are stored in plain Python lists. Not suitable for
-    cross-process communication.
+    Messages are stored in plain Python lists, protected by a lock for
+    thread safety. Not suitable for cross-process communication.
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._messages: dict[str, list[Message]] = defaultdict(list)
 
     def store(self, message: Message) -> None:
@@ -24,7 +26,8 @@ class MemoryBackend:
         Args:
             message: Message to store.
         """
-        self._messages[message.channel].append(message)
+        with self._lock:
+            self._messages[message.channel].append(message)
 
     def query(
         self,
@@ -42,7 +45,8 @@ class MemoryBackend:
         Returns:
             Messages in chronological order (oldest first).
         """
-        msgs = self._messages.get(channel, [])
+        with self._lock:
+            msgs = list(self._messages.get(channel, []))
         if after:
             msgs = [m for m in msgs if m.id > after]
         return msgs[:limit]
@@ -53,7 +57,8 @@ class MemoryBackend:
         Returns:
             Sorted list of channel names.
         """
-        return sorted(ch for ch, msgs in self._messages.items() if msgs)
+        with self._lock:
+            return sorted(ch for ch, msgs in self._messages.items() if msgs)
 
     def count_messages(self, channel: str | None = None) -> int:
         """Count messages, optionally filtered by channel.
@@ -64,9 +69,10 @@ class MemoryBackend:
         Returns:
             Number of messages.
         """
-        if channel:
-            return len(self._messages.get(channel, []))
-        return sum(len(msgs) for msgs in self._messages.values())
+        with self._lock:
+            if channel:
+                return len(self._messages.get(channel, []))
+            return sum(len(msgs) for msgs in self._messages.values())
 
     def query_all(
         self,
@@ -88,11 +94,12 @@ class MemoryBackend:
         Returns:
             Messages in chronological order (oldest first).
         """
-        if channel:
-            msgs = list(self._messages.get(channel, []))
-        else:
-            msgs = [m for ch_msgs in self._messages.values() for m in ch_msgs]
-            msgs.sort(key=lambda m: m.id)
+        with self._lock:
+            if channel:
+                msgs = list(self._messages.get(channel, []))
+            else:
+                msgs = [m for ch_msgs in self._messages.values() for m in ch_msgs]
+                msgs.sort(key=lambda m: m.id)
 
         msgs = self._apply_filters(msgs, after=after, sender=sender, msg_type=msg_type)
         return msgs[:limit]
@@ -120,7 +127,10 @@ class MemoryBackend:
             Dict with total_messages, total_channels, total_senders,
             channel_breakdown, and msg_type_distribution.
         """
-        all_msgs = [m for ch_msgs in self._messages.values() for m in ch_msgs]
+        with self._lock:
+            all_msgs = [m for ch_msgs in self._messages.values() for m in ch_msgs]
+            n_channels = len(self._messages)
+
         senders: set[str] = set()
         types: dict[str, int] = {}
         breakdown: dict[str, dict] = {}
@@ -147,7 +157,7 @@ class MemoryBackend:
 
         return {
             "total_messages": len(all_msgs),
-            "total_channels": len(self._messages),
+            "total_channels": n_channels,
             "total_senders": len(senders),
             "channel_breakdown": sorted(
                 breakdown.values(),
@@ -171,16 +181,18 @@ class MemoryBackend:
         """
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
         result = []
-        for msgs in self._messages.values():
-            for m in msgs:
-                if m.timestamp > cutoff:
-                    result.append(m.timestamp)
+        with self._lock:
+            for msgs in self._messages.values():
+                for m in msgs:
+                    if m.timestamp > cutoff:
+                        result.append(m.timestamp)
         result.sort()
         return result
 
     def close(self) -> None:
         """Clear all stored messages."""
-        self._messages.clear()
+        with self._lock:
+            self._messages.clear()
 
     def __repr__(self) -> str:
         return "MemoryBackend()"
