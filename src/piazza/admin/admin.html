@@ -508,6 +508,8 @@ tr:hover { background: var(--accent-light); }
 .tree-group-body.open { display: block; }
 .tree-group-body table { width: 100%; border-collapse: collapse; }
 .tree-group-body td { padding: 8px 16px 8px 40px; font-size: 0.85rem; border-top: 1px solid var(--border); }
+.tree-group-body table, #channelViewContainer table { table-layout: fixed; }
+#channelViewContainer td:first-child { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-group-body tr:hover { background: var(--accent-light); }
 .agent-card {
     background: var(--bg-secondary); border: 1px solid var(--border);
@@ -1129,6 +1131,7 @@ function renderChannelView() {
 
 function setChannelView(view) {
     channelView = view;
+    activeChannelDetail = null;
     document.querySelectorAll('.ch-view-btns button').forEach(b => b.classList.remove('active'));
     document.querySelector(`.ch-view-btns button:nth-child(${view === 'tree' ? 1 : view === 'flat' ? 2 : 3})`).classList.add('active');
     renderChannelView();
@@ -1151,14 +1154,14 @@ async function openChannelDetail(name) {
         const typeBadges = ch.msg_types.map(t =>
             `<span class="badge">${esc(t.msg_type)}</span> <span class="badge badge-count">${t.count}</span>`
         ).join(' ');
-        const senderBadges = ch.senders.map(s => `<span class="badge">${esc(s)}</span>`).join(' ');
+        const senderBadges = ch.senders.map(s => `<span class="badge" style="background:${getSenderColor(s)}20;color:${getSenderColor(s)};border:1px solid ${getSenderColor(s)}40">${esc(s)}</span>`).join(' ');
 
         // Fetch recent messages for preview
         const msgData = await api.getMessages({ channel: name, limit: 20 });
         const msgRows = msgData.messages.map(m => `
             <tr>
                 <td style="font-size:0.8rem;color:var(--text-secondary)">${formatTime(m.timestamp)}</td>
-                <td><span class="badge">${esc(m.sender)}</span></td>
+                <td><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)}">${esc(m.sender)}</span></td>
                 <td><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
                 <td style="font-size:0.85rem;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((m.payload || '').substring(0, 120))}</td>
             </tr>

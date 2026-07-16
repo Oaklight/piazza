@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import contextvars
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from piazza._vendor.httpserver import App, JSONResponse, Response, StreamingResponse
@@ -41,6 +42,9 @@ if TYPE_CHECKING:
 
 # Paths that skip token auth
 _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
+
+# Channel name: lowercase alphanumeric, hyphens, dots, colons. 1-128 chars.
+_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,126}[a-z0-9]$|^[a-z0-9]$")
 
 # Per-request auth result: str (agent_id), None (supertoken), True (no auth)
 _auth_result_var: contextvars.ContextVar[Any] = contextvars.ContextVar("auth_result", default=True)
@@ -60,20 +64,19 @@ def _agent_involved(agent_id: str, channel: str, sender: str) -> bool:
 _PRIVATE_CHANNEL_PREFIXES = ("notebook:", "memory:")
 
 
-def _check_publish_auth(auth_result: Any, sender: str, channel: str) -> tuple[dict, int] | None:
-    """Enforce sender identity and channel ownership for publish requests.
+def _validate_and_auth_publish(
+    auth_result: Any, sender: str, channel: str
+) -> tuple[dict, int] | None:
+    """Validate channel name and enforce publish auth.
 
-    For scoped tokens (auth_result is a str agent_id):
-    1. The sender field must match the token's agent_id.
-    2. Private channels (``notebook:X``, ``memory:X``) are writable
-       only by agent X.
-
-    Supertokens (auth_result is None) and unauthenticated requests
-    (auth_result is True) skip all checks.
-
-    Returns:
-        Error tuple ``(body_dict, 403)`` if access denied, else ``None``.
+    Returns error tuple or None if OK.
     """
+    if not _CHANNEL_RE.match(channel):
+        return {
+            "error": "Bad Request",
+            "message": "Channel name must be 1-128 chars, lowercase alphanumeric + hyphens/dots/colons",
+        }, 400
+
     if not isinstance(auth_result, str):
         return None
 
@@ -274,7 +277,7 @@ class HttpFrontend:
                 return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
 
             auth_result = _auth_result_var.get()
-            auth_error = _check_publish_auth(auth_result, data["sender"], data["channel"])
+            auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
             if auth_error:
                 return auth_error
 
