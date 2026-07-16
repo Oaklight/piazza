@@ -18,6 +18,18 @@ from piazza._vendor.sse import SSEClient
 from piazza.types import Message
 
 
+class PiazzaAPIError(Exception):
+    """Raised when the Piazza server returns a non-2xx HTTP response.
+
+    Attributes:
+        status_code: The HTTP status code from the server.
+    """
+
+    def __init__(self, status_code: int, message: str) -> None:
+        self.status_code = status_code
+        super().__init__(f"HTTP {status_code}: {message}")
+
+
 class HttpTransport:
     """Client-side transport that talks to a remote HttpFrontend.
 
@@ -87,6 +99,7 @@ class HttpTransport:
             body["metadata"] = metadata
 
         resp = self._http.post(f"{self._base_url}/v1/publish", json=body)
+        self._check_response(resp)
         return resp.json()["message_id"]
 
     def query(
@@ -102,11 +115,13 @@ class HttpTransport:
 
         url = f"{self._base_url}/v1/query?{urllib.parse.urlencode(params)}"
         resp = self._http.get(url)
+        self._check_response(resp)
         return [self._dict_to_msg(m) for m in resp.json().get("messages", [])]
 
     def list_channels(self) -> list[str]:
         """List all channels on the remote server."""
         resp = self._http.get(f"{self._base_url}/v1/channels")
+        self._check_response(resp)
         return resp.json().get("channels", [])
 
     @property
@@ -114,6 +129,7 @@ class HttpTransport:
         """Whether the remote bus requires authentication."""
         if self._require_auth is None:
             resp = self._http.get(f"{self._base_url}/v1/auth/check")
+            self._check_response(resp)
             self._require_auth = resp.json().get("require_auth", False)
         return self._require_auth
 
@@ -249,6 +265,21 @@ class HttpTransport:
                 cb(msg)
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _check_response(resp) -> None:
+        """Raise PiazzaAPIError if the response indicates a failure."""
+        if resp.status_code >= 400:
+            try:
+                error = resp.json() if resp.content else {}
+            except Exception:
+                error = {}
+            raise PiazzaAPIError(
+                resp.status_code,
+                error.get("message", "Request failed")
+                if isinstance(error, dict)
+                else "Request failed",
+            )
 
     @staticmethod
     def _dict_to_msg(d: dict) -> Message:

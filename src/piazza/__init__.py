@@ -8,7 +8,7 @@ from piazza.client import PiazzaClient
 from piazza.protocols import Backend, MessageBus, Serializer
 from piazza.serializers import JSONSerializer
 from piazza.server import PiazzaServer
-from piazza.transport_http import HttpTransport
+from piazza.transport_http import HttpTransport, PiazzaAPIError
 from piazza.types import Message
 
 # Backward compatibility aliases (deprecated, will be removed)
@@ -20,6 +20,7 @@ __all__ = [
     "Backend",
     "Bus",
     "HttpTransport",
+    "PiazzaAPIError",
     "JSONSerializer",
     "MemoryBackend",
     "MemoryStorage",
