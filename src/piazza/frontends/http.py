@@ -73,44 +73,60 @@ def _agent_involved(agent_id: str, channel: str, sender: str) -> bool:
 _PRIVATE_CHANNEL_PREFIXES = ("notebook:", "memory:")
 
 
-def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
+def _validate_channel_name(
+    channel: str, token_store: TokenStore | None = None
+) -> tuple[dict, int] | None:
     """Validate channel name. Returns error tuple or None if OK."""
     is_reserved = any(channel.startswith(p) for p in _RESERVED_PREFIXES)
 
     if is_reserved:
         if not _SYSTEM_CHANNEL_RE.match(channel):
             return {"error": "Bad Request", "message": "Invalid system channel name"}, 400
-    else:
-        if len(channel) < 3 or not _USER_CHANNEL_RE.match(channel):
-            return {
-                "error": "Bad Request",
-                "message": "Channel name must be 3-64 chars, start with letter, end with letter/digit, "
-                "lowercase, no colons (reserved for system prefixes)",
-            }, 400
-        if not any(c.isalpha() for c in channel):
-            return {
-                "error": "Bad Request",
-                "message": "Channel name must contain at least one letter",
-            }, 400
-        if channel != channel.lower():
-            return {"error": "Bad Request", "message": "Channel name must be lowercase"}, 400
-        if _NO_CONSECUTIVE_SPECIALS.search(channel):
-            return {
-                "error": "Bad Request",
-                "message": "Channel name cannot contain consecutive special characters",
-            }, 400
+        return None
+
+    # Check for custom registered prefix (channel contains colon)
+    if ":" in channel:
+        prefix = channel.split(":")[0]
+        if token_store and token_store.is_registered_prefix(prefix):
+            if len(channel) < 3 or len(channel) > 64 or channel != channel.lower():
+                return {"error": "Bad Request", "message": "Invalid prefixed channel name"}, 400
+            return None
+        return {
+            "error": "Bad Request",
+            "message": f"Prefix '{prefix}:' is not registered. Register custom prefixes via admin panel.",
+        }, 400
+
+    # Plain user channel — no colons
+    if len(channel) < 3 or not _USER_CHANNEL_RE.match(channel):
+        return {
+            "error": "Bad Request",
+            "message": "Channel name must be 3-64 chars, start with letter, end with letter/digit, "
+            "lowercase, no colons (use registered prefixes for namespaced channels)",
+        }, 400
+    if not any(c.isalpha() for c in channel):
+        return {
+            "error": "Bad Request",
+            "message": "Channel name must contain at least one letter",
+        }, 400
+    if channel != channel.lower():
+        return {"error": "Bad Request", "message": "Channel name must be lowercase"}, 400
+    if _NO_CONSECUTIVE_SPECIALS.search(channel):
+        return {
+            "error": "Bad Request",
+            "message": "Channel name cannot contain consecutive special characters",
+        }, 400
 
     return None
 
 
 def _validate_and_auth_publish(
-    auth_result: Any, sender: str, channel: str
+    auth_result: Any, sender: str, channel: str, token_store: TokenStore | None = None
 ) -> tuple[dict, int] | None:
     """Validate channel name and enforce publish auth.
 
     Returns error tuple or None if OK.
     """
-    err = _validate_channel_name(channel)
+    err = _validate_channel_name(channel, token_store=token_store)
     if err:
         return err
 
@@ -452,7 +468,9 @@ class HttpFrontend:
             data["channel"] = data["channel"].strip()
             data["sender"] = data["sender"].strip()
 
-            auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
+            auth_error = _validate_and_auth_publish(
+                auth_result, data["sender"], data["channel"], token_store=self._token_store
+            )
             if auth_error:
                 return auth_error
 

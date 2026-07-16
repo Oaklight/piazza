@@ -34,7 +34,12 @@ CREATE TABLE IF NOT EXISTS tokens (
     label        TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     last_used_at TEXT
-)
+);
+CREATE TABLE IF NOT EXISTS channel_prefixes (
+    prefix      TEXT PRIMARY KEY,
+    label       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
 """
 
 
@@ -91,8 +96,7 @@ class TokenStore:
     def _ensure_table(self) -> None:
         """Create the tokens table if it does not exist."""
         conn = self._conn()
-        conn.execute(_CREATE_TABLE)
-        conn.commit()
+        conn.executescript(_CREATE_TABLE)
 
     def list_tokens(self) -> list[dict[str, Any]]:
         """List all tokens with metadata (no secret values).
@@ -245,6 +249,61 @@ class TokenStore:
             pass
 
         return matched_agent
+
+    # ── Channel Prefix Management ─────────────────────────────────
+
+    _BUILTIN_PREFIXES = frozenset({"_system", "dm", "notebook", "memory", "broadcast"})
+
+    def list_prefixes(self) -> list[dict[str, Any]]:
+        """List all registered custom channel prefixes."""
+        rows = (
+            self._conn()
+            .execute("SELECT prefix, label, created_at FROM channel_prefixes ORDER BY prefix")
+            .fetchall()
+        )
+        return [dict(row) for row in rows]
+
+    def register_prefix(self, prefix: str, label: str = "") -> dict[str, Any] | None:
+        """Register a custom channel prefix (admin-only).
+
+        Returns entry dict, or None if it's a built-in prefix.
+        """
+        if prefix in self._BUILTIN_PREFIXES:
+            return None
+        now = _now_iso()
+        conn = self._conn()
+        # Don't overwrite created_at if prefix already exists
+        conn.execute(
+            "INSERT INTO channel_prefixes (prefix, label, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(prefix) DO UPDATE SET label = excluded.label",
+            (prefix, label, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT prefix, label, created_at FROM channel_prefixes WHERE prefix = ?",
+            (prefix,),
+        ).fetchone()
+        return dict(row) if row else {"prefix": prefix, "label": label, "created_at": now}
+
+    def delete_prefix(self, prefix: str) -> bool:
+        """Remove a registered custom prefix."""
+        if prefix in self._BUILTIN_PREFIXES:
+            return False
+        conn = self._conn()
+        cursor = conn.execute("DELETE FROM channel_prefixes WHERE prefix = ?", (prefix,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def is_registered_prefix(self, prefix: str) -> bool:
+        """Check if a prefix is registered (custom or built-in)."""
+        if prefix in self._BUILTIN_PREFIXES:
+            return True
+        row = (
+            self._conn()
+            .execute("SELECT 1 FROM channel_prefixes WHERE prefix = ?", (prefix,))
+            .fetchone()
+        )
+        return row is not None
 
     def has_tokens(self) -> bool:
         """Check if any tokens exist in the store.

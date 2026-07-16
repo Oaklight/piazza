@@ -8,6 +8,7 @@ token management, and optional web UI.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -219,6 +220,7 @@ class AdminServer:
         self._setup_message_routes()
         self._setup_subscription_routes()
         self._setup_system_routes()
+        self._setup_prefix_routes()
         self._setup_token_routes()
 
     def _setup_ui_routes(self) -> None:
@@ -439,6 +441,57 @@ class AdminServer:
             if token_store:
                 info["tokens"]["configured"] = len(token_store.list_tokens())
             return info
+
+    def _setup_prefix_routes(self) -> None:
+        """Channel prefix registration routes (admin-only)."""
+        token_store = self._token_store
+
+        @self._app.get("/api/prefixes")
+        def list_prefixes(request: Any) -> dict:
+            if token_store is None:
+                return {"prefixes": [], "enabled": False}
+            return {"prefixes": token_store.list_prefixes(), "enabled": True}
+
+        @self._app.post("/api/prefixes")
+        def register_prefix(request: Any) -> dict | tuple:
+            if token_store is None:
+                return {
+                    "error": "Service Unavailable",
+                    "message": "Token store not configured",
+                }, 503
+            data = request.json() if request.body else {}
+            prefix = (data.get("prefix") or "").strip().lower()
+            if (
+                not prefix
+                or len(prefix) < 2
+                or len(prefix) > 32
+                or not re.match(r"^[a-z][a-z0-9]{1,31}$", prefix)
+            ):
+                return {
+                    "error": "Bad Request",
+                    "message": "Prefix must be 2-32 lowercase alphanumeric, start with letter",
+                }, 400
+            result = token_store.register_prefix(prefix=prefix, label=data.get("label", ""))
+            if result is None:
+                return {
+                    "error": "Bad Request",
+                    "message": f"'{prefix}' is a built-in prefix and cannot be registered",
+                }, 400
+            return {"ok": True, "prefix": result}, 201
+
+        @self._app.delete("/api/prefixes/<prefix>")
+        def delete_prefix(request: Any, prefix: str) -> dict | tuple:
+            if token_store is None:
+                return {
+                    "error": "Service Unavailable",
+                    "message": "Token store not configured",
+                }, 503
+            if token_store.delete_prefix(prefix):
+                return {"ok": True, "deleted": prefix}
+            return {
+                "error": "Not Found",
+                "message": f"Prefix '{prefix}' not found or is built-in",
+            }, 404
 
     def _setup_token_routes(self) -> None:
         """Token CRUD routes."""
