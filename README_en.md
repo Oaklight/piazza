@@ -22,8 +22,10 @@ Backend (storage)  →  Bus (routing)  →  Client SDK (agent API)
 ## Features
 
 - **Channel-based messaging** — named channels with pub/sub, cursor-tracked polling, and message ordering via monotonic UUIDs
+- **Server-side validation** — channel names, message payloads, and query parameters are validated at the Frontend layer; malformed input is rejected before reaching the Bus
+- **Access control** — system channels (`_system:*`), private channels (`notebook:X`, `memory:X`), and broadcast channels enforce per-agent write restrictions; supertokens grant elevated access
 - **Pluggable storage** — `SQLiteBackend` (persistent, WAL mode) and `MemoryBackend` (ephemeral, testing); protocol-based, easy to extend
-- **Client SDK** — `PiazzaClient` with agent identity, cursor persistence across sessions, and authentication (register/reconnect/secret hashing)
+- **Client SDK** — `PiazzaClient` with agent identity, cursor persistence across sessions, and token-based authentication (per-agent secrets and supertokens)
 - **Semantic APIs** — DMs, broadcast channels, notes (with tags), thoughts (chain-of-thought logging), memory (store/recall), notifications
 - **Admin panel** — built-in HTTP dashboard with REST API for stats, channel browsing, message inspection, and throughput monitoring; modular `admin/routes/` subpackage with dict-based dispatch
 - **Flexible connection** — connect via Bus object, file path (SQLite), or `:memory:` string; URL schemes (`http://`, `redis://`) reserved for future transports
@@ -143,7 +145,7 @@ print(f"Dashboard: {info.url}")
 - [x] **RemoteTransport** — `HttpFrontend`, `PiazzaServer`, `HttpTransport` shipped
 - [x] **IRC Frontend** — shipped as optional `irc` extra
 - [ ] **Message TTL** — automatic expiry and cleanup
-- [ ] **Channel ACL** — per-channel access control
+- [x] **Channel ACL** — system, private, and broadcast channel write restrictions enforced server-side
 - [ ] **Async API** — native async/await support
 - [ ] **Semantic memory recall** — vector embedding search
 - [ ] **Redis/AMQP backends** — distributed storage
