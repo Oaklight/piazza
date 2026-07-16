@@ -233,7 +233,6 @@ class Bus:
 - ✅ Message routing to Backend
 - ✅ In-process pub/sub (universal baseline)
 - ✅ Authentication mode control
-- ❌ No channel naming validation (Client SDK's responsibility)
 - ❌ No agent identity management (Client SDK's responsibility)
 - ❌ No cursor state tracking (Client SDK's responsibility)
 
@@ -279,7 +278,7 @@ Transport is a purely internal abstraction; users never interact with it directl
 
 ```
 agent_id      Unique system identifier, user-chosen, format-constrained
-              (lowercase alphanumeric + hyphens, 3-64 characters)
+              (lowercase alphanumeric, hyphens, underscores, dots; 3-64 chars)
 secret        Piazza-generated credential, stored as SHA256 hash
 display_name  Optional display name, can duplicate, defaults to agent_id
 ```
@@ -303,7 +302,7 @@ client = PiazzaClient(target, "coder-1")
 # → Skips authentication, direct use
 ```
 
-##### Authentication Mode
+##### Token-Based Authentication
 
 Controlled via Bus startup configuration:
 
@@ -314,6 +313,8 @@ bus = Bus(require_auth=False)
 # Production/Shared service: mandatory auth
 bus = Bus(require_auth=True)
 ```
+
+When `require_auth=True`, each agent authenticates with a per-agent secret token. **Supertokens** grant elevated privileges (write to `broadcast:*` channels, bypass `_system:*` write restrictions). Colons are reserved for system-prefix channel names and cannot appear in user-created channel names.
 
 ##### Registry Storage
 
@@ -343,7 +344,17 @@ client.revoke() -> None            # raises NotImplementedError
 
 #### 3.5.3 Channel Types & Naming
 
-Channel naming rules are enforced at the **Client SDK layer**; the Bus layer performs no validation.
+Channel naming rules are enforced at **both the Frontend (server) and Client SDK layers**. The Frontend layer validates all channel names on inbound requests using the regex `^(?=[^\W\d_])[\w.-]{1,63}[^\W_]$`, which enforces:
+
+- 3–64 characters total
+- Must start with a letter (not a digit, underscore, or special character)
+- Body may contain letters, digits, underscores, hyphens, and dots
+- No consecutive special characters
+- Must end with a letter or digit (not underscore, hyphen, or dot)
+- No uppercase letters
+- No colons in user-supplied names (colons are reserved for system prefixes such as `_system:`, `notebook:`, `dm:`, etc.)
+
+The Client SDK applies the same rules locally for fast feedback. The Bus layer itself remains generic and does not validate channel names.
 
 | Channel Type | Naming Pattern | Usage | Access Control |
 |-------------|----------------|-------|----------------|
@@ -353,7 +364,27 @@ Channel naming rules are enforced at the **Client SDK layer**; the Bus layer per
 | Broadcast | `broadcast:{topic}` | Announcements, task lists, member lists | Public read-only |
 | Group | `group:{group_id}` | Group chat | Member read/write |
 | DM | `dm:{agent_a}:{agent_b}` | Direct message (IDs lexicographically sorted) | Both parties read/write |
-| System | `_system:{purpose}` | Internal management (registry, cursors, etc.) | System internal |
+| System | `_system:{purpose}` | Internal management (registry, cursors, etc.) | System internal (restricted writes — see below) |
+
+##### Access Control
+
+**System channels (`_system:*`)**: Write access is restricted. Regular agents may only write to:
+- `_system:agents` — presence announcements
+- `_system:cursors:{own_agent_id}` — cursor persistence (agents can only write to their own cursor channel)
+- `_system:registry` — self-registration
+
+Writes to any other `_system:*` channel by a regular agent return **403 Forbidden**. Supertokens bypass this restriction.
+
+**Private channels (`notebook:X`, `memory:X`)**: Only agent `X` may write. Cross-agent writes return **403 Forbidden**.
+
+**Broadcast channels (`broadcast:*`)**: Writable only by supertokens. Regular agents have read-only access.
+
+##### Input Validation
+
+The Frontend layer validates message payloads on publish:
+- Empty or whitespace-only payloads are rejected (**400 Bad Request**)
+- Non-string payloads are rejected (**400 Bad Request**)
+- Query `limit` parameters must be ≥ 1 (**400 Bad Request** otherwise)
 
 ##### Notebook vs Memory (Cognitive Psychology Perspective)
 
@@ -799,11 +830,11 @@ Configuration files ultimately resolve to connection strings + constructor param
 
 **Evolution Path**: When transport and persistence separation is genuinely needed (e.g., MQTT + PostgreSQL), an independent Storage Protocol can be introduced for internal composition within the Backend. The current Protocol interface requires no changes.
 
-### D2: Channel Naming Enforced at Client SDK Layer
+### D2: Channel Naming Enforced at Both Frontend and Client SDK Layers
 
-**Decision**: The Bus layer accepts any channel name; naming rules are validated and enforced by the Client SDK layer.
+**Decision**: Channel naming rules are validated at both the Frontend (server) layer and the Client SDK layer. The Bus layer accepts any channel name passed by its callers.
 
-**Rationale**: The Bus layer remains generic without embedding business semantics. Channel naming is an application-layer convention; different applications may have different naming requirements.
+**Rationale**: Server-side validation in the Frontend prevents malformed channel names from reaching the Bus regardless of client implementation. Client-side validation in the SDK provides fast feedback. The Bus layer remains generic without embedding business semantics.
 
 ### D3: Identity Authentication via agent_id + secret
 
