@@ -313,6 +313,80 @@ def auth_server(tmp_path):
     server.shutdown()
 
 
+class TestChannelNameValidation:
+    """Channel naming rules enforcement."""
+
+    def test_64_char_channel_accepted(self, server_url: str) -> None:
+        """A 64-char all-letter channel name should be accepted (boundary)."""
+        client = PiazzaClient(server_url, "validator")
+        name = "a" * 64
+        client.channel_send(name, "boundary test")
+        msgs = client.channel_read(name)
+        assert len(msgs) == 1
+        assert msgs[0].payload == "boundary test"
+        client.close()
+
+    def test_65_char_channel_rejected(self, server_url: str) -> None:
+        """A 65-char channel name exceeds the max and should be rejected."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("a" * 65, "too long")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_trailing_underscore_rejected(self, server_url: str) -> None:
+        """Trailing underscore should be rejected like other trailing specials."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("abc_", "trailing underscore")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_trailing_hyphen_rejected(self, server_url: str) -> None:
+        """Trailing hyphen should be rejected."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("abc-", "trailing hyphen")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_trailing_dot_rejected(self, server_url: str) -> None:
+        """Trailing dot should be rejected."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("abc.", "trailing dot")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_valid_names_accepted(self, server_url: str) -> None:
+        """Valid channel names with various allowed chars should pass."""
+        client = PiazzaClient(server_url, "validator")
+        for name in ["abc", "test-hyphens", "test.dots", "test_under", "aaa"]:
+            client.channel_send(name, f"valid: {name}")
+            msgs = client.channel_read(name)
+            assert len(msgs) >= 1, f"{name} should be accepted"
+        client.close()
+
+    def test_min_length_enforced(self, server_url: str) -> None:
+        """Channel names shorter than 3 chars should be rejected."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        for name in ["a", "ab"]:
+            with pytest.raises(PiazzaAPIError) as exc_info:
+                client.channel_send(name, "too short")
+            assert exc_info.value.status_code == 400
+        client.close()
+
+
 class TestChannelOwnership:
     """Private channel ownership enforcement (notebook:X, memory:X)."""
 
