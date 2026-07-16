@@ -229,7 +229,11 @@ class Bus:
 - ✅ 将消息路由到 Backend
 - ✅ In-process pub/sub（作为通用基线）
 - ✅ 认证模式控制
-- ❌ 不做 channel 命名校验（由 Client SDK 负责）
+- ✅ Channel 命名验证（服务端强制执行，见 §3.5.3）
+- ✅ 输入验证（空/非字符串 payload 拒绝，limit 参数校验）
+- ✅ System channel 写入权限控制（见 §3.5.3）
+- ✅ 私有频道所有权检查（notebook/memory，见 §3.5.3）
+- ✅ Broadcast 频道写入限制（仅 supertoken，见 §3.5.3）
 - ❌ 不管理 agent 身份（由 Client SDK 负责）
 - ❌ 不追踪 cursor 状态（由 Client SDK 负责）
 
@@ -338,17 +342,52 @@ client.revoke() -> None            # raises NotImplementedError
 
 #### 3.5.3 Channel 类型与命名
 
-Channel 命名规则在 **Client SDK 层**强制执行，Bus 层不做校验。
+Channel 命名规则在**服务端（Bus/Frontend 层）强制执行**，Client SDK 层同样做校验以提供更好的错误提示。
+
+##### 命名规则
+
+- 长度：3–64 字符
+- 必须以字母开头
+- 必须以字母或数字结尾（不能以下划线、连字符或点号结尾）
+- 不允许大写字母
+- 不允许冒号（保留给系统前缀如 `_system:`）
+- 不允许连续特殊字符（如 `..`、`--`、`__`）
+- 正则表达式：`^(?=[^\W\d_])[\w.-]{1,63}[^\W_]$`
+
+> **注：** 带系统前缀的频道（如 `_system:registry`、`notebook:agent-1`）由 Client SDK 自动构造，不受上述通用规则约束。通用命名规则适用于用户自定义的频道名（如 group、broadcast 的 topic 部分）。
 
 | Channel 类型 | 命名模式 | 用途 | 访问控制 |
 |-------------|----------|------|----------|
 | History | `history:{agent_id}` | 对话/工作记录 | 私有，SDK 自动写入 |
-| Notebook | `notebook:{agent_id}` | 思考过程、临时笔记（含 Thought） | 私有，agent 主动写 |
-| Memory | `memory:{agent_id}` | 长期记忆（语义记忆） | 私有 |
-| Broadcast | `broadcast:{topic}` | 公告、任务列表、成员列表 | 公开只读 |
+| Notebook | `notebook:{agent_id}` | 思考过程、临时笔记（含 Thought） | **私有 — 仅所属 agent 可写入**，跨 agent 写入返回 403 |
+| Memory | `memory:{agent_id}` | 长期记忆（语义记忆） | **私有 — 仅所属 agent 可写入**，跨 agent 写入返回 403 |
+| Broadcast | `broadcast:{topic}` | 公告、任务列表、成员列表 | **仅 supertoken 可写入**，普通 agent 只读 |
 | Group | `group:{group_id}` | 群聊 | 成员可读写 |
 | DM | `dm:{agent_a}:{agent_b}` | 私聊（双方 ID 按字典序排列） | 双方可读写 |
-| System | `_system:{purpose}` | 内部管理（注册表、cursor 等） | 系统内部 |
+| System | `_system:{purpose}` | 内部管理（注册表、cursor 等） | **受限写入**（见下文） |
+
+##### System Channel 鉴权
+
+`_system:*` 频道对普通 agent 有写入限制，以防止滥用系统频道：
+
+| 允许的 System Channel | 写入者 | 用途 |
+|----------------------|--------|------|
+| `_system:agents` | 任意 agent | Presence（在线状态） |
+| `_system:cursors:{自己的 agent_id}` | 对应 agent | Cursor 快照持久化 |
+| `_system:registry` | 任意 agent | 自注册 |
+
+- 其他 `_system:*` 频道的写入请求返回 **403 Forbidden**
+- Supertoken 不受此限制，可写入任意 `_system:*` 频道
+
+##### 私有频道所有权
+
+- `notebook:X` 和 `memory:X` 频道只能由 agent X 写入
+- 其他 agent 尝试写入将返回 **403 Forbidden**
+
+##### Broadcast 频道写入限制
+
+- `broadcast:*` 频道只有持有 supertoken 的客户端可以写入
+- 普通 agent 写入将返回 **403 Forbidden**
 
 ##### Notebook vs Memory（认知心理学视角）
 
@@ -757,6 +796,19 @@ logging:
 
 ## 8. 错误处理
 
+### 8.1 输入验证
+
+Bus 层对所有写入操作执行以下验证，不合规的请求返回 HTTP 400：
+
+| 验证规则 | 拒绝条件 |
+|----------|----------|
+| Payload 不得为空 | 空字符串或纯空白 payload 被拒绝 |
+| Payload 必须是字符串 | 非字符串类型的 payload 被拒绝 |
+| Limit 参数校验 | 查询时 `limit` 必须 >= 1 |
+| Channel 名称校验 | 不符合命名规则的 channel 名被拒绝（见 §3.5.3） |
+
+### 8.2 错误恢复策略
+
 **MVP 策略**：简单重试 + 返回错误给 agent，由 agent 自行决定处理方式。
 
 **未来扩展**：
@@ -793,11 +845,13 @@ logging:
 
 **演进路径**：当确实需要 transport 与 persistence 分离时（如 MQTT + PostgreSQL），可引入独立的 Storage Protocol，Backend 内部组合使用。当前 Protocol 接口无需变更。
 
-### D2: Channel 命名在 Client SDK 层强制
+### D2: Channel 命名在服务端强制执行
 
-**决策**：Bus 层接受任意 channel 名，命名规则由 Client SDK 层校验和强制执行。
+**决策**：Channel 命名规则在服务端（Bus/Frontend 层）强制执行，Client SDK 层同样做前置校验。
 
-**理由**：Bus 层保持通用性，不嵌入业务语义。Channel 命名是应用层约定，不同应用可能有不同的命名需求。
+**理由**：仅在 Client SDK 层校验无法防止恶意或绕过 SDK 的客户端提交非法频道名。服务端验证确保数据完整性，同时 Client SDK 的前置校验提供更好的开发体验和错误提示。
+
+**变更历史**：早期版本中，Bus 层接受任意 channel 名，命名规则仅由 Client SDK 层校验。随着安全需求和输入验证的加强，验证逻辑已提升到服务端执行。
 
 ### D3: 身份认证采用 agent_id + secret
 

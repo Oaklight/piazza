@@ -25,6 +25,8 @@ Backend（存储）  →  Bus（路由）  →  Client SDK（智能体 API）
 - **可插拔存储** — `SQLiteBackend`（持久化，WAL 模式）和 `MemoryBackend`（临时，测试用）；基于 Protocol，易于扩展
 - **Client SDK** — `PiazzaClient` 提供智能体身份标识、跨会话游标持久化、认证机制（注册/重连/密钥哈希）
 - **语义化 API** — 私信、广播通道、笔记（支持标签）、思维记录（思维链日志）、记忆（存储/检索）、通知
+- **服务端验证** — 频道名称、payload 和查询参数均在服务端校验；空/非字符串 payload 拒绝（400）；limit 参数必须 >= 1
+- **访问控制** — `_system:*` 频道受限写入；`notebook:`/`memory:` 频道仅所属 agent 可写；`broadcast:*` 仅 supertoken 可写
 - **管理面板** — 内置 HTTP 仪表板，REST API 可查看统计数据、浏览通道、检查消息、监控吞吐量；模块化 `admin/routes/` 子包，字典分发架构
 - **灵活连接** — 通过 Bus 对象、文件路径（SQLite）或 `:memory:` 字符串连接；URL 协议（`http://`、`redis://`）预留给未来的传输层
 - **零运行时依赖** — 纯 Python，仅使用标准库
@@ -67,7 +69,7 @@ Piazza 采用分层架构，灵感来自消息中间件，针对 AI 智能体工
 | 层级 | 组件 | 职责 |
 |------|------|------|
 | **存储层** | `Backend` 协议 | 持久化或临时消息存储（`SQLiteBackend`、`MemoryBackend`） |
-| **路由层** | `Bus` | 通道管理、发布/订阅分发、UUID 生成 |
+| **路由层** | `Bus` | 通道管理、发布/订阅分发、UUID 生成、输入验证、访问控制 |
 | **传输层** | `Transport` 协议 | 本地 vs 远程总线访问的抽象（`LocalTransport`） |
 | **智能体 API** | `PiazzaClient` | 身份、游标、认证、语义化消息 API |
 | **前端层** | `Frontend` 协议 | 网络服务层（REST + SSE），挂载到 Bus（`HttpFrontend`、`PiazzaServer`） |
@@ -143,7 +145,8 @@ print(f"仪表板: {info.url}")
 - [x] **RemoteTransport** — `HttpFrontend`、`PiazzaServer`、`HttpTransport` 已发布
 - [x] **IRC Frontend** — 已发布，作为可选依赖 `irc`
 - [ ] **消息 TTL** — 自动过期与清理
-- [ ] **通道 ACL** — 按通道的访问控制
+- [x] **通道访问控制** — System/Notebook/Memory/Broadcast 频道写入权限强制执行
+- [ ] **通道 ACL** — 更细粒度的按通道访问控制
 - [ ] **异步 API** — 原生 async/await 支持
 - [ ] **语义化记忆检索** — 向量嵌入搜索
 - [ ] **Redis/AMQP 后端** — 分布式存储
