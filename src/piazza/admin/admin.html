@@ -1158,14 +1158,21 @@ async function openChannelDetail(name) {
 
         // Fetch recent messages for preview
         const msgData = await api.getMessages({ channel: name, limit: 20 });
-        const msgRows = msgData.messages.map(m => `
+        const msgRows = msgData.messages.map((m, i) => {
+            const payload = m.payload || '';
+            const short = payload.length > 100 ? payload.substring(0, 100) + '...' : payload;
+            const expandable = payload.length > 100;
+            return `
             <tr>
-                <td style="font-size:0.8rem;color:var(--text-secondary)">${formatTime(m.timestamp)}</td>
-                <td><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)}">${esc(m.sender)}</span></td>
-                <td><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
-                <td style="font-size:0.85rem;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((m.payload || '').substring(0, 120))}</td>
-            </tr>
-        `).join('');
+                <td style="font-size:0.8rem;color:var(--text-secondary);white-space:nowrap;width:90px">${formatTime(m.timestamp)}</td>
+                <td style="width:80px"><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)}">${esc(m.sender)}</span></td>
+                <td style="width:50px"><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
+                <td style="font-size:0.85rem">${expandable
+                    ? `<span class="clickable" style="color:var(--text-primary)" onclick="this.innerHTML=this.dataset.full?this.dataset.short:this.dataset.full;this.dataset.full=this.dataset.full?'':'';this.style.whiteSpace=this.style.whiteSpace==='pre-wrap'?'nowrap':'pre-wrap'" data-short="${esc(short)}" data-full="${esc(payload)}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">${esc(short)}</span>`
+                    : `<span>${esc(payload)}</span>`
+                }</td>
+            </tr>`;
+        }).join('');
 
         container.innerHTML = `
             <div class="ch-detail-panel">
