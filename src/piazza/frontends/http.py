@@ -43,8 +43,8 @@ if TYPE_CHECKING:
 # Paths that skip token auth
 _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 
-# Channel name: lowercase alphanumeric, hyphens, dots, colons. 1-128 chars.
-_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,126}[a-z0-9]$|^[a-z0-9]$")
+# Channel name: lowercase alphanumeric, underscores, hyphens, dots, colons. 1-128 chars.
+_CHANNEL_RE = re.compile(r"^[a-z0-9_][a-z0-9:._-]{0,126}[a-z0-9]$|^[a-z0-9_]$")
 
 # Per-request auth result: str (agent_id), None (supertoken), True (no auth)
 _auth_result_var: contextvars.ContextVar[Any] = contextvars.ContextVar("auth_result", default=True)
