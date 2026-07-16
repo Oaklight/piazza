@@ -413,3 +413,43 @@ class TestChannelOwnership:
         msg_id = transport.publish("notebook:milo", "admin", "note", "admin override")
         assert msg_id
         transport.close()
+
+
+class TestLimitValidation:
+    """Query limit parameter validation."""
+
+    def test_negative_limit_rejected(self, server_url: str) -> None:
+        """Negative limit should return 400."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        http = HttpClient()
+        resp = http.get(f"{server_url}/v1/query?channel=test&limit=-1")
+        assert resp.status_code == 400
+        assert "limit" in resp.json()["message"].lower()
+        http.close()
+
+    def test_zero_limit_rejected(self, server_url: str) -> None:
+        """Zero limit should return 400."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        http = HttpClient()
+        resp = http.get(f"{server_url}/v1/query?channel=test&limit=0")
+        assert resp.status_code == 400
+        http.close()
+
+    def test_valid_limit_accepted(self, server_url: str) -> None:
+        """Positive limit should work normally."""
+        client = PiazzaClient(server_url, "limiter")
+        client.channel_send("limit-test", "msg1")
+        msgs = client.channel_read("limit-test", limit=10)
+        assert len(msgs) == 1
+        client.close()
+
+    def test_large_limit_clamped(self, server_url: str) -> None:
+        """Limit above max_query_limit should be silently clamped."""
+        client = PiazzaClient(server_url, "limiter")
+        client.channel_send("limit-test2", "msg")
+        # Should not error even with very large limit
+        msgs = client.channel_read("limit-test2", limit=999999)
+        assert len(msgs) >= 1
+        client.close()

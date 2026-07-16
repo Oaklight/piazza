@@ -102,6 +102,20 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
     return None
 
 
+def _parse_limit(raw: str, max_limit: int) -> int | tuple[dict, int]:
+    """Parse and validate a query limit parameter.
+
+    Returns int on success, or (error_dict, status_code) on failure.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
+    if value < 1:
+        return {"error": "Bad Request", "message": "'limit' must be >= 1"}, 400
+    return min(value, max_limit)
+
+
 def _validate_and_auth_publish(
     auth_result: Any, sender: str, channel: str
 ) -> tuple[dict, int] | None:
@@ -343,13 +357,12 @@ class HttpFrontend:
                 return {"error": "Bad Request", "message": "Query param 'channel' required"}, 400
 
             after = (request.query_params.get("after") or [None])[0]
-            try:
-                limit = min(
-                    int((request.query_params.get("limit") or ["100"])[0]),
-                    max_query_limit,
-                )
-            except ValueError:
-                return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
+            result = _parse_limit(
+                (request.query_params.get("limit") or ["100"])[0], max_query_limit
+            )
+            if isinstance(result, tuple):
+                return result
+            limit = result
 
             msgs = await asyncio.to_thread(bus.poll, channel, after=after, limit=limit)
 
