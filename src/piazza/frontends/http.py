@@ -49,7 +49,7 @@ _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 # - System/auto channels (_system:, dm:, notebook:, memory:, broadcast:)
 #   are exempt from user rules — validated separately
 # Unicode letters (+) allowed for non-English channel names
-_USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w:.-]{3,64}$")
+_USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w:.-]{1,62}[\w]$")
 _NO_CONSECUTIVE_SPECIALS = re.compile(r"[:._{}-]{2}")
 _RESERVED_PREFIXES = ("_system:", "dm:", "notebook:", "memory:", "broadcast:")
 _SYSTEM_CHANNEL_RE = re.compile(r"^[\w_][\w:.-]{1,126}[\w]$")
@@ -80,11 +80,11 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
         if not _SYSTEM_CHANNEL_RE.match(channel):
             return {"error": "Bad Request", "message": "Invalid system channel name"}, 400
     else:
-        if not _USER_CHANNEL_RE.match(channel):
+        if len(channel) < 3 or not _USER_CHANNEL_RE.match(channel):
             return {
                 "error": "Bad Request",
-                "message": "Channel name must be 3-64 chars, start with a letter, "
-                "lowercase alphanumeric + hyphens/dots/colons/underscores",
+                "message": "Channel name must be 3-64 chars, start/end with letter or digit, "
+                "lowercase, no trailing specials",
             }, 400
         if not any(c.isalpha() for c in channel):
             return {
@@ -320,6 +320,8 @@ class HttpFrontend:
                 return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
 
             auth_result = _auth_result_var.get()
+            data["channel"] = data["channel"].strip()
+            data["sender"] = data["sender"].strip()
             auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
             if auth_error:
                 return auth_error

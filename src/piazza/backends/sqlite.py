@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -40,6 +41,7 @@ class SQLiteBackend:
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._db_path = str(db_path)
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # Set busy_timeout BEFORE any other PRAGMA so subsequent
@@ -77,20 +79,21 @@ class SQLiteBackend:
             message: Message to store.
         """
         meta_json = json.dumps(message.metadata) if message.metadata else None
-        self._conn.execute(
-            "INSERT INTO messages (id, channel, sender, msg_type, payload, timestamp, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                message.id,
-                message.channel,
-                message.sender,
-                message.msg_type,
-                message.payload,
-                message.timestamp,
-                meta_json,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO messages (id, channel, sender, msg_type, payload, timestamp, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    message.id,
+                    message.channel,
+                    message.sender,
+                    message.msg_type,
+                    message.payload,
+                    message.timestamp,
+                    meta_json,
+                ),
+            )
+            self._conn.commit()
 
     def query(
         self,
@@ -108,17 +111,18 @@ class SQLiteBackend:
         Returns:
             Messages in chronological order (oldest first).
         """
-        if after:
-            cursor = self._conn.execute(
-                "SELECT * FROM messages WHERE channel = ? AND id > ? ORDER BY id ASC LIMIT ?",
-                (channel, after, limit),
-            )
-        else:
-            cursor = self._conn.execute(
-                "SELECT * FROM messages WHERE channel = ? ORDER BY id ASC LIMIT ?",
-                (channel, limit),
-            )
-        return [self._row_to_message(row) for row in cursor.fetchall()]
+        with self._lock:
+            if after:
+                cursor = self._conn.execute(
+                    "SELECT * FROM messages WHERE channel = ? AND id > ? ORDER BY id ASC LIMIT ?",
+                    (channel, after, limit),
+                )
+            else:
+                cursor = self._conn.execute(
+                    "SELECT * FROM messages WHERE channel = ? ORDER BY id ASC LIMIT ?",
+                    (channel, limit),
+                )
+            return [self._row_to_message(row) for row in cursor.fetchall()]
 
     def list_channels(self) -> list[str]:
         """List all channels that have at least one message.
@@ -126,8 +130,9 @@ class SQLiteBackend:
         Returns:
             Sorted list of channel names.
         """
-        cursor = self._conn.execute("SELECT DISTINCT channel FROM messages ORDER BY channel")
-        return [row["channel"] for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self._conn.execute("SELECT DISTINCT channel FROM messages ORDER BY channel")
+            return [row["channel"] for row in cursor.fetchall()]
 
     def close(self) -> None:
         """Close the SQLite database connection."""
@@ -142,13 +147,14 @@ class SQLiteBackend:
         Returns:
             Number of messages.
         """
-        if channel:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE channel = ?", (channel,)
-            ).fetchone()
-        else:
-            row = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
-        return row[0]
+        with self._lock:
+            if channel:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE channel = ?", (channel,)
+                ).fetchone()
+            else:
+                row = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+            return row[0]
 
     def query_all(
         self,
@@ -187,11 +193,12 @@ class SQLiteBackend:
 
         where = " AND ".join(clauses) if clauses else "1=1"
         params.append(limit)
-        cursor = self._conn.execute(
-            f"SELECT * FROM messages WHERE {where} ORDER BY id ASC LIMIT ?",
-            params,
-        )
-        return [self._row_to_message(row) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self._conn.execute(
+                f"SELECT * FROM messages WHERE {where} ORDER BY id ASC LIMIT ?",
+                params,
+            )
+            return [self._row_to_message(row) for row in cursor.fetchall()]
 
     def get_stats(self) -> dict:
         """Return aggregate statistics for admin dashboard.
@@ -200,38 +207,43 @@ class SQLiteBackend:
             Dict with total_messages, total_channels, total_senders,
             channel_breakdown, and msg_type_distribution.
         """
-        total = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-        channels = self._conn.execute("SELECT COUNT(DISTINCT channel) FROM messages").fetchone()[0]
-        senders = self._conn.execute("SELECT COUNT(DISTINCT sender) FROM messages").fetchone()[0]
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            channels = self._conn.execute(
+                "SELECT COUNT(DISTINCT channel) FROM messages"
+            ).fetchone()[0]
+            senders = self._conn.execute("SELECT COUNT(DISTINCT sender) FROM messages").fetchone()[
+                0
+            ]
 
-        breakdown = []
-        for row in self._conn.execute(
-            "SELECT channel, COUNT(*) as cnt, MAX(timestamp) as last_ts, "
-            "COUNT(DISTINCT sender) as scnt "
-            "FROM messages GROUP BY channel ORDER BY cnt DESC"
-        ).fetchall():
-            breakdown.append(
-                {
-                    "channel": row[0],
-                    "message_count": row[1],
-                    "last_message_time": row[2],
-                    "sender_count": row[3],
-                }
-            )
+            breakdown = []
+            for row in self._conn.execute(
+                "SELECT channel, COUNT(*) as cnt, MAX(timestamp) as last_ts, "
+                "COUNT(DISTINCT sender) as scnt "
+                "FROM messages GROUP BY channel ORDER BY cnt DESC"
+            ).fetchall():
+                breakdown.append(
+                    {
+                        "channel": row[0],
+                        "message_count": row[1],
+                        "last_message_time": row[2],
+                        "sender_count": row[3],
+                    }
+                )
 
-        types = []
-        for row in self._conn.execute(
-            "SELECT msg_type, COUNT(*) as cnt FROM messages GROUP BY msg_type ORDER BY cnt DESC"
-        ).fetchall():
-            types.append({"msg_type": row[0], "count": row[1]})
+            types = []
+            for row in self._conn.execute(
+                "SELECT msg_type, COUNT(*) as cnt FROM messages GROUP BY msg_type ORDER BY cnt DESC"
+            ).fetchall():
+                types.append({"msg_type": row[0], "count": row[1]})
 
-        return {
-            "total_messages": total,
-            "total_channels": channels,
-            "total_senders": senders,
-            "channel_breakdown": breakdown,
-            "msg_type_distribution": types,
-        }
+            return {
+                "total_messages": total,
+                "total_channels": channels,
+                "total_senders": senders,
+                "channel_breakdown": breakdown,
+                "msg_type_distribution": types,
+            }
 
     def query_recent_timestamps(self, seconds: int = 60) -> list[str]:
         """Return timestamps of messages from the last N seconds.
@@ -242,12 +254,13 @@ class SQLiteBackend:
         Returns:
             List of ISO 8601 timestamp strings, sorted ascending.
         """
-        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
-        cursor = self._conn.execute(
-            "SELECT timestamp FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
-            (cutoff,),
-        )
-        return [row[0] for row in cursor.fetchall()]
+        with self._lock:
+            cutoff = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+            cursor = self._conn.execute(
+                "SELECT timestamp FROM messages WHERE timestamp > ? ORDER BY timestamp ASC",
+                (cutoff,),
+            )
+            return [row[0] for row in cursor.fetchall()]
 
     @staticmethod
     def _row_to_message(row: sqlite3.Row) -> Message:

@@ -69,11 +69,11 @@ class TestHttpTransport:
     def test_query_with_cursor(self, server_url: str) -> None:
         transport = HttpTransport(server_url, agent_id="test-agent")
 
-        id1 = transport.publish("ch", "a", "chat", "first")
-        id2 = transport.publish("ch", "a", "chat", "second")
-        id3 = transport.publish("ch", "a", "chat", "third")
+        id1 = transport.publish("test-ch", "a", "chat", "first")
+        id2 = transport.publish("test-ch", "a", "chat", "second")
+        id3 = transport.publish("test-ch", "a", "chat", "third")
 
-        msgs = transport.query("ch", after=id1)
+        msgs = transport.query("test-ch", after=id1)
         assert len(msgs) == 2
         assert msgs[0].id == id2
         assert msgs[1].id == id3
