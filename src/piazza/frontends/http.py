@@ -103,57 +103,6 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
     return None
 
 
-_PUBLISH_REQUIRED_FIELDS = ("channel", "sender", "msg_type", "payload")
-
-
-_MSG_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}[a-z0-9]$|^[a-z]$")
-
-
-def _validate_publish_data(data: dict) -> tuple[dict, int] | None:
-    """Check required fields, msg_type, and payload content."""
-    missing = [f for f in _PUBLISH_REQUIRED_FIELDS if f not in data]
-    if missing:
-        return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
-    # Trim inputs
-    for key in ("channel", "sender", "msg_type"):
-        if isinstance(data.get(key), str):
-            data[key] = data[key].strip()
-    # Validate msg_type
-    mt = data.get("msg_type", "")
-    if not _MSG_TYPE_RE.match(mt):
-        return {
-            "error": "Bad Request",
-            "message": "msg_type must be 1-32 chars, lowercase, start with letter",
-        }, 400
-    if len(mt) >= 3 and len(set(mt)) == 1:
-        return {
-            "error": "Bad Request",
-            "message": "msg_type cannot be a single repeated character",
-        }, 400
-    return _validate_payload(data["payload"])
-
-
-def _validate_payload(payload: Any) -> tuple[dict, int] | None:
-    """Reject empty or whitespace-only string payloads."""
-    if isinstance(payload, str) and not payload.strip():
-        return {"error": "Bad Request", "message": "Payload must not be empty"}, 400
-    return None
-
-
-def _parse_limit(request: Any, max_limit: int) -> int | tuple[dict, int]:
-    """Parse and validate the 'limit' query parameter.
-
-    Returns the clamped limit or an error tuple.
-    """
-    try:
-        raw = int((request.query_params.get("limit") or ["100"])[0])
-    except ValueError:
-        return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
-    if raw < 1:
-        return {"error": "Bad Request", "message": "'limit' must be >= 1"}, 400
-    return min(raw, max_limit)
-
-
 def _validate_and_auth_publish(
     auth_result: Any, sender: str, channel: str
 ) -> tuple[dict, int] | None:
@@ -209,6 +158,119 @@ def _validate_and_auth_publish(
                 }, 403
 
     return None
+
+
+_PUBLISH_REQUIRED = ("channel", "sender", "msg_type", "payload")
+_MAX_MSG_TYPE_LEN = 64
+
+
+def _parse_publish_body(request: Any) -> dict | tuple:
+    """Parse and validate the publish request body.
+
+    Returns the validated data dict, or an (error_dict, status) tuple.
+    """
+    try:
+        data = request.json()
+    except Exception:
+        return {
+            "error": "Bad Request",
+            "message": "Request body must be valid JSON",
+        }, 400
+    if not isinstance(data, dict):
+        return {
+            "error": "Bad Request",
+            "message": "Request body must be a JSON object",
+        }, 400
+
+    missing = [f for f in _PUBLISH_REQUIRED if f not in data]
+    if missing:
+        return {
+            "error": "Bad Request",
+            "message": f"Missing: {', '.join(missing)}",
+        }, 400
+
+    payload = data["payload"]
+    if not isinstance(payload, str) or not payload.strip():
+        return {
+            "error": "Bad Request",
+            "message": "Payload must be a non-empty string",
+        }, 400
+
+    msg_type = data["msg_type"]
+    if not isinstance(msg_type, str) or not msg_type.strip():
+        return {
+            "error": "Bad Request",
+            "message": "msg_type must be a non-empty string",
+        }, 400
+    data["msg_type"] = msg_type.strip()
+    if len(data["msg_type"]) > _MAX_MSG_TYPE_LEN:
+        return {
+            "error": "Bad Request",
+            "message": f"msg_type must be at most {_MAX_MSG_TYPE_LEN} characters",
+        }, 400
+
+    return data
+
+
+def _parse_query_limit(raw: str | None, max_limit: int) -> int | tuple[dict, int]:
+    """Parse and validate query limit parameter.
+
+    Returns int limit on success, or (error_dict, status) tuple.
+    """
+    try:
+        limit = int(raw or "100")
+    except ValueError:
+        return {
+            "error": "Bad Request",
+            "message": "'limit' must be an integer",
+        }, 400
+    if limit < 1:
+        return {
+            "error": "Bad Request",
+            "message": "'limit' must be at least 1",
+        }, 400
+    return min(limit, max_limit)
+
+
+def _parse_query_params(request: Any, max_limit: int) -> dict:
+    """Extract and validate query parameters (channel, after, limit).
+
+    Returns dict with 'channel', 'after', 'limit' on success,
+    or dict with 'error' key and '_status' key on failure.
+    """
+    channel = (request.query_params.get("channel") or [None])[0]
+    if not channel:
+        return {
+            "error": "Bad Request",
+            "message": "Query param 'channel' required",
+            "_status": 400,
+        }
+
+    after = (request.query_params.get("after") or [None])[0]
+    limit = _parse_query_limit(
+        (request.query_params.get("limit") or [None])[0],
+        max_limit,
+    )
+    if not isinstance(limit, int):
+        return {"error": limit[0]["error"], "message": limit[0]["message"], "_status": 400}
+
+    return {"channel": channel, "after": after, "limit": limit}
+
+
+async def _handle_registry_lookup(request: Any, bus: Any) -> dict | tuple:
+    """Handle /v1/registry/lookup requests."""
+    agent_id = (request.query_params.get("agent_id") or [None])[0]
+    if not agent_id:
+        return {
+            "error": "Bad Request",
+            "message": "Query param 'agent_id' required",
+        }, 400
+
+    msgs = await asyncio.to_thread(bus.poll, "_system:registry", limit=1000)
+    for m in reversed(msgs):
+        if m.sender == agent_id and m.msg_type == "register":
+            return {"found": True, "agent_id": agent_id, "metadata": m.metadata}
+    return {"found": False, "agent_id": agent_id}
 
 
 def _msg_to_dict(m: Message) -> dict[str, Any]:
@@ -381,10 +443,10 @@ class HttpFrontend:
 
         @self._app.post("/v1/publish")
         async def publish(request: Request) -> dict | tuple:
-            data = request.json()
-            err = _validate_publish_data(data)
-            if err:
-                return err
+            parsed = _parse_publish_body(request)
+            if not isinstance(parsed, dict):
+                return parsed  # error tuple
+            data = parsed
 
             auth_result = _auth_result_var.get()
             data["channel"] = data["channel"].strip()
@@ -406,15 +468,11 @@ class HttpFrontend:
 
         @self._app.get("/v1/query")
         async def query(request: Request) -> dict | tuple:
-            channel = (request.query_params.get("channel") or [None])[0]
-            if not channel:
-                return {"error": "Bad Request", "message": "Query param 'channel' required"}, 400
-
-            after = (request.query_params.get("after") or [None])[0]
-            limit_or_err = _parse_limit(request, max_query_limit)
-            if isinstance(limit_or_err, tuple):
-                return limit_or_err
-            limit = limit_or_err
+            qp = _parse_query_params(request, max_query_limit)
+            if "error" in qp:
+                status = qp.pop("_status", 400)
+                return qp, status
+            channel, after, limit = qp["channel"], qp["after"], qp["limit"]
 
             msgs = await asyncio.to_thread(bus.poll, channel, after=after, limit=limit)
 
@@ -443,15 +501,7 @@ class HttpFrontend:
 
         @self._app.get("/v1/registry/lookup")
         async def registry_lookup(request: Request) -> dict | tuple:
-            agent_id = (request.query_params.get("agent_id") or [None])[0]
-            if not agent_id:
-                return {"error": "Bad Request", "message": "Query param 'agent_id' required"}, 400
-
-            msgs = await asyncio.to_thread(bus.poll, "_system:registry", limit=1000)
-            for m in reversed(msgs):
-                if m.sender == agent_id and m.msg_type == "register":
-                    return {"found": True, "agent_id": agent_id, "metadata": m.metadata}
-            return {"found": False, "agent_id": agent_id}
+            return await _handle_registry_lookup(request, bus)
 
     def _setup_sse_route(self) -> None:
         """Register the SSE subscribe route."""
