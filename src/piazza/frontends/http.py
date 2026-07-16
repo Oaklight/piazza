@@ -49,6 +49,7 @@ _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 # - System/auto channels (_system:, dm:, notebook:, memory:, broadcast:)
 #   are exempt from user rules — validated separately
 # User channels: no colons (reserved for system prefixes), Unicode letters OK
+# End anchor [^\W_] = letters/digits (no trailing underscore)
 _USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w.-]{1,63}[^\W_]$")
 _NO_CONSECUTIVE_SPECIALS = re.compile(r"[._{}-]{2}")
 _RESERVED_PREFIXES = ("_system:", "dm:", "notebook:", "memory:", "broadcast:")
