@@ -1162,13 +1162,14 @@ async function openChannelDetail(name) {
             const payload = m.payload || '';
             const short = payload.length > 100 ? payload.substring(0, 100) + '...' : payload;
             const expandable = payload.length > 100;
+            const payloadId = `detail-payload-${i}`;
             return `
             <tr>
-                <td style="font-size:0.8rem;color:var(--text-secondary);white-space:nowrap;width:90px">${formatTime(m.timestamp)}</td>
-                <td style="width:80px"><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)}">${esc(m.sender)}</span></td>
-                <td style="width:50px"><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
-                <td style="font-size:0.85rem">${expandable
-                    ? `<span class="clickable" style="color:var(--text-primary)" onclick="this.innerHTML=this.dataset.full?this.dataset.short:this.dataset.full;this.dataset.full=this.dataset.full?'':'';this.style.whiteSpace=this.style.whiteSpace==='pre-wrap'?'nowrap':'pre-wrap'" data-short="${esc(short)}" data-full="${esc(payload)}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">${esc(short)}</span>`
+                <td style="font-size:0.8rem;color:var(--text-secondary);white-space:nowrap;width:80px">${formatTime(m.timestamp)}</td>
+                <td style="width:auto;white-space:nowrap"><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)};font-size:0.75rem">${esc(m.sender)}</span></td>
+                <td style="width:auto;white-space:nowrap"><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
+                <td style="font-size:0.85rem;word-break:break-word">${expandable
+                    ? `<span class="clickable" style="color:var(--text-primary);cursor:pointer" onclick="toggleDetailPayload('${payloadId}')">${esc(short)}</span><div id="${payloadId}" style="display:none;white-space:pre-wrap;margin-top:6px;padding:8px;background:var(--bg-primary);border-radius:var(--radius-sm);font-family:monospace;font-size:0.8rem;max-height:300px;overflow-y:auto">${esc(payload)}</div>`
                     : `<span>${esc(payload)}</span>`
                 }</td>
             </tr>`;
@@ -1199,7 +1200,7 @@ async function openChannelDetail(name) {
                 <div class="detail-section-title">Recent Messages</div>
                 <div class="table-container" style="margin-top:4px">
                     <table>
-                        <thead><tr><th>Time</th><th>Sender</th><th>Type</th><th>Payload</th></tr></thead>
+                        <thead><tr><th style="width:80px">Time</th><th style="width:auto">Sender</th><th style="width:auto">Type</th><th>Payload</th></tr></thead>
                         <tbody>${msgRows || '<tr><td colspan="4" style="color:var(--text-secondary);text-align:center">No messages</td></tr>'}</tbody>
                     </table>
                 </div>
@@ -1291,6 +1292,11 @@ async function loadMessages() {
     } catch (e) {
         console.error('Messages load error:', e);
     }
+}
+
+function toggleDetailPayload(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
 function togglePayload(index) {
