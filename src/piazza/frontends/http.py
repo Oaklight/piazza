@@ -106,11 +106,30 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
 _PUBLISH_REQUIRED_FIELDS = ("channel", "sender", "msg_type", "payload")
 
 
+_MSG_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}[a-z0-9]$|^[a-z]$")
+
+
 def _validate_publish_data(data: dict) -> tuple[dict, int] | None:
-    """Check required fields and payload content."""
+    """Check required fields, msg_type, and payload content."""
     missing = [f for f in _PUBLISH_REQUIRED_FIELDS if f not in data]
     if missing:
         return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
+    # Trim inputs
+    for key in ("channel", "sender", "msg_type"):
+        if isinstance(data.get(key), str):
+            data[key] = data[key].strip()
+    # Validate msg_type
+    mt = data.get("msg_type", "")
+    if not _MSG_TYPE_RE.match(mt):
+        return {
+            "error": "Bad Request",
+            "message": "msg_type must be 1-32 chars, lowercase, start with letter",
+        }, 400
+    if len(mt) >= 3 and len(set(mt)) == 1:
+        return {
+            "error": "Bad Request",
+            "message": "msg_type cannot be a single repeated character",
+        }, 400
     return _validate_payload(data["payload"])
 
 
