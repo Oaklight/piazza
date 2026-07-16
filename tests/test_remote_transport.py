@@ -283,3 +283,133 @@ class TestServerLifecycle:
         frontend = HttpFrontend()
         with pytest.raises(RuntimeError, match="Must call attach"):
             frontend.serve_forever()
+
+
+# ── Channel Ownership Auth Tests ─────────────────────────────────
+
+
+@pytest.fixture()
+def auth_server(tmp_path):
+    """Start a PiazzaServer with token auth enabled, yield (url, token_store)."""
+    from piazza.token_store import TokenStore
+
+    db_path = str(tmp_path / "auth_test.db")
+    token_store = TokenStore(db_path)
+
+    bus = Bus(backend=MemoryBackend())
+    frontend = HttpFrontend(host="127.0.0.1", port=0, token_store=token_store)
+    server = PiazzaServer(bus)
+    server.add_frontend(frontend)
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.3)
+
+    host, port = frontend.address
+    url = f"http://{host}:{port}"
+
+    yield url, token_store
+
+    server.shutdown()
+
+
+class TestChannelOwnership:
+    """Private channel ownership enforcement (notebook:X, memory:X)."""
+
+    def test_cross_agent_notebook_write_blocked(self, auth_server) -> None:
+        """Elena cannot write to notebook:milo — must get 403."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        url, store = auth_server
+
+        milo_token = store.create_token("milo", "Milo's token")["token"]
+        elena_token = store.create_token("elena", "Elena's token")["token"]
+
+        # Milo can write to his own notebook
+        milo_transport = HttpTransport(url, agent_id="milo", token=milo_token)
+        msg_id = milo_transport.publish("notebook:milo", "milo", "note", "my private note")
+        assert msg_id
+        milo_transport.close()
+
+        # Elena tries to write to Milo's notebook — should get 403
+        http = HttpClient(
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {elena_token}",
+            }
+        )
+        resp = http.post(
+            f"{url}/v1/publish",
+            json={
+                "channel": "notebook:milo",
+                "sender": "elena",
+                "msg_type": "note",
+                "payload": "snooping",
+            },
+        )
+        assert resp.status_code == 403
+        body = resp.json()
+        assert body["error"] == "Forbidden"
+        assert "notebook:milo" in body["message"]
+        http.close()
+
+    def test_cross_agent_memory_write_blocked(self, auth_server) -> None:
+        """An agent cannot write to another agent's memory channel."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        url, store = auth_server
+
+        alice_token = store.create_token("alice", "Alice's token")["token"]
+        bob_token = store.create_token("bob", "Bob's token")["token"]
+
+        # Alice can write to her own memory
+        alice_transport = HttpTransport(url, agent_id="alice", token=alice_token)
+        msg_id = alice_transport.publish("memory:alice", "alice", "memo", "remember this")
+        assert msg_id
+        alice_transport.close()
+
+        # Bob tries to write to Alice's memory — should get 403
+        http = HttpClient(
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {bob_token}",
+            }
+        )
+        resp = http.post(
+            f"{url}/v1/publish",
+            json={
+                "channel": "memory:alice",
+                "sender": "bob",
+                "msg_type": "memo",
+                "payload": "injecting",
+            },
+        )
+        assert resp.status_code == 403
+        body = resp.json()
+        assert body["error"] == "Forbidden"
+        assert "memory:alice" in body["message"]
+        http.close()
+
+    def test_own_notebook_write_allowed(self, auth_server) -> None:
+        """An agent can write to its own notebook channel."""
+        url, store = auth_server
+        token = store.create_token("agent-x", "X's token")["token"]
+
+        transport = HttpTransport(url, agent_id="agent-x", token=token)
+        msg_id = transport.publish("notebook:agent-x", "agent-x", "note", "my note")
+        assert msg_id
+
+        msgs = transport.query("notebook:agent-x")
+        assert len(msgs) == 1
+        assert msgs[0].payload == "my note"
+        transport.close()
+
+    def test_supertoken_bypasses_ownership(self, auth_server) -> None:
+        """Supertokens can write to any private channel."""
+        url, store = auth_server
+        super_token = store.create_token(agent_id=None, label="admin")["token"]
+
+        transport = HttpTransport(url, agent_id="admin", token=super_token)
+        msg_id = transport.publish("notebook:milo", "admin", "note", "admin override")
+        assert msg_id
+        transport.close()

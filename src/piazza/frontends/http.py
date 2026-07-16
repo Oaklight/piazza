@@ -57,6 +57,46 @@ def _agent_involved(agent_id: str, channel: str, sender: str) -> bool:
     return agent_id in channel.split(":")
 
 
+_PRIVATE_CHANNEL_PREFIXES = ("notebook:", "memory:")
+
+
+def _check_publish_auth(auth_result: Any, sender: str, channel: str) -> tuple[dict, int] | None:
+    """Enforce sender identity and channel ownership for publish requests.
+
+    For scoped tokens (auth_result is a str agent_id):
+    1. The sender field must match the token's agent_id.
+    2. Private channels (``notebook:X``, ``memory:X``) are writable
+       only by agent X.
+
+    Supertokens (auth_result is None) and unauthenticated requests
+    (auth_result is True) skip all checks.
+
+    Returns:
+        Error tuple ``(body_dict, 403)`` if access denied, else ``None``.
+    """
+    if not isinstance(auth_result, str):
+        return None
+
+    # Sender identity: token must match the declared sender
+    if sender != auth_result:
+        return {
+            "error": "Forbidden",
+            "message": f"Token bound to '{auth_result}', cannot publish as '{sender}'",
+        }, 403
+
+    # Channel ownership: notebook:X and memory:X are private to agent X
+    for prefix in _PRIVATE_CHANNEL_PREFIXES:
+        if channel.startswith(prefix):
+            owner = channel[len(prefix) :]
+            if owner != auth_result:
+                return {
+                    "error": "Forbidden",
+                    "message": f"Channel '{channel}' belongs to agent '{owner}'",
+                }, 403
+
+    return None
+
+
 def _msg_to_dict(m: Message) -> dict[str, Any]:
     """Serialize a Message to a dict."""
     return {
@@ -234,13 +274,9 @@ class HttpFrontend:
                 return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
 
             auth_result = _auth_result_var.get()
-            if isinstance(auth_result, str) and data["sender"] != auth_result:
-                return {
-                    "error": "Forbidden",
-                    "message": (
-                        f"Token bound to '{auth_result}', cannot publish as '{data['sender']}'"
-                    ),
-                }, 403
+            auth_error = _check_publish_auth(auth_result, data["sender"], data["channel"])
+            if auth_error:
+                return auth_error
 
             msg_id = await asyncio.to_thread(
                 bus.publish,
