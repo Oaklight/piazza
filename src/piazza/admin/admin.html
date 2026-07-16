@@ -1169,7 +1169,7 @@ async function openChannelDetail(name) {
                 <td style="width:auto;white-space:nowrap"><span class="badge" style="background:${getSenderColor(m.sender)}20;color:${getSenderColor(m.sender)};font-size:0.75rem">${esc(m.sender)}</span></td>
                 <td style="width:auto;white-space:nowrap"><span class="msg-type-badge">${esc(m.msg_type)}</span></td>
                 <td style="font-size:0.85rem;word-break:break-word">${expandable
-                    ? `<span class="clickable" style="color:var(--text-primary);cursor:pointer" onclick="toggleDetailPayload('${payloadId}')">${esc(short)}</span><div id="${payloadId}" style="display:none;white-space:pre-wrap;margin-top:6px;padding:8px;background:var(--bg-primary);border-radius:var(--radius-sm);font-family:monospace;font-size:0.8rem;max-height:300px;overflow-y:auto">${esc(payload)}</div>`
+                    ? `<span id="${payloadId}-short" class="clickable" style="cursor:pointer" onclick="toggleDetailPayload('${payloadId}')">${esc(short)}</span><div id="${payloadId}-full" style="display:none;white-space:pre-wrap;padding:8px;background:var(--bg-primary);border-radius:var(--radius-sm);font-size:0.8rem;max-height:300px;overflow-y:auto;cursor:pointer" onclick="toggleDetailPayload('${payloadId}')">${esc(payload)}</div>`
                     : `<span>${esc(payload)}</span>`
                 }</td>
             </tr>`;
@@ -1295,8 +1295,12 @@ async function loadMessages() {
 }
 
 function toggleDetailPayload(id) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    const short = document.getElementById(id + '-short');
+    const full = document.getElementById(id + '-full');
+    if (!short || !full) return;
+    const isExpanded = full.style.display !== 'none';
+    short.style.display = isExpanded ? '' : 'none';
+    full.style.display = isExpanded ? 'none' : 'block';
 }
 
 function togglePayload(index) {
