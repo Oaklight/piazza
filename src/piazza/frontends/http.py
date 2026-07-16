@@ -319,6 +319,14 @@ class HttpFrontend:
             if missing:
                 return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
 
+            # Validate payload is non-empty
+            payload = data["payload"]
+            if not isinstance(payload, str) or not payload.strip():
+                return {
+                    "error": "Bad Request",
+                    "message": "Payload must be a non-empty string",
+                }, 400
+
             auth_result = _auth_result_var.get()
             data["channel"] = data["channel"].strip()
             data["sender"] = data["sender"].strip()
@@ -344,12 +352,12 @@ class HttpFrontend:
 
             after = (request.query_params.get("after") or [None])[0]
             try:
-                limit = min(
-                    int((request.query_params.get("limit") or ["100"])[0]),
-                    max_query_limit,
-                )
+                limit = int((request.query_params.get("limit") or ["100"])[0])
             except ValueError:
                 return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
+            if limit < 1:
+                return {"error": "Bad Request", "message": "'limit' must be at least 1"}, 400
+            limit = min(limit, max_query_limit)
 
             msgs = await asyncio.to_thread(bus.poll, channel, after=after, limit=limit)
 
