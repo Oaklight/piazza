@@ -43,8 +43,16 @@ if TYPE_CHECKING:
 # Paths that skip token auth
 _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 
-# Channel name: lowercase alphanumeric, underscores, hyphens, dots, colons. 1-128 chars.
-_CHANNEL_RE = re.compile(r"^[a-z0-9_][a-z0-9:._-]{0,126}[a-z0-9]$|^[a-z0-9_]$")
+# Channel naming rules:
+# - User channels: 3-64 chars, must contain a letter, start with [a-z],
+#   end with [a-z0-9], no consecutive special chars
+# - System/auto channels (_system:, dm:, notebook:, memory:, broadcast:)
+#   are exempt from user rules — validated separately
+# Unicode letters (+) allowed for non-English channel names
+_USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w:.-]{3,64}$")
+_NO_CONSECUTIVE_SPECIALS = re.compile(r"[:._{}-]{2}")
+_RESERVED_PREFIXES = ("_system:", "dm:", "notebook:", "memory:", "broadcast:")
+_SYSTEM_CHANNEL_RE = re.compile(r"^[\w_][\w:.-]{1,126}[\w]$")
 
 # Per-request auth result: str (agent_id), None (supertoken), True (no auth)
 _auth_result_var: contextvars.ContextVar[Any] = contextvars.ContextVar("auth_result", default=True)
@@ -64,6 +72,36 @@ def _agent_involved(agent_id: str, channel: str, sender: str) -> bool:
 _PRIVATE_CHANNEL_PREFIXES = ("notebook:", "memory:")
 
 
+def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
+    """Validate channel name. Returns error tuple or None if OK."""
+    is_reserved = any(channel.startswith(p) for p in _RESERVED_PREFIXES)
+
+    if is_reserved:
+        if not _SYSTEM_CHANNEL_RE.match(channel):
+            return {"error": "Bad Request", "message": "Invalid system channel name"}, 400
+    else:
+        if not _USER_CHANNEL_RE.match(channel):
+            return {
+                "error": "Bad Request",
+                "message": "Channel name must be 3-64 chars, start with a letter, "
+                "lowercase alphanumeric + hyphens/dots/colons/underscores",
+            }, 400
+        if not any(c.isalpha() for c in channel):
+            return {
+                "error": "Bad Request",
+                "message": "Channel name must contain at least one letter",
+            }, 400
+        if channel != channel.lower():
+            return {"error": "Bad Request", "message": "Channel name must be lowercase"}, 400
+        if _NO_CONSECUTIVE_SPECIALS.search(channel):
+            return {
+                "error": "Bad Request",
+                "message": "Channel name cannot contain consecutive special characters",
+            }, 400
+
+    return None
+
+
 def _validate_and_auth_publish(
     auth_result: Any, sender: str, channel: str
 ) -> tuple[dict, int] | None:
@@ -71,11 +109,9 @@ def _validate_and_auth_publish(
 
     Returns error tuple or None if OK.
     """
-    if not _CHANNEL_RE.match(channel):
-        return {
-            "error": "Bad Request",
-            "message": "Channel name must be 1-128 chars, lowercase alphanumeric + hyphens/dots/colons",
-        }, 400
+    err = _validate_channel_name(channel)
+    if err:
+        return err
 
     if not isinstance(auth_result, str):
         return None
@@ -85,6 +121,13 @@ def _validate_and_auth_publish(
         return {
             "error": "Forbidden",
             "message": f"Token bound to '{auth_result}', cannot publish as '{sender}'",
+        }, 403
+
+    # Broadcast channels: only supertokens can write
+    if channel.startswith("broadcast:"):
+        return {
+            "error": "Forbidden",
+            "message": f"Channel '{channel}' is reserved for admin use",
         }, 403
 
     # Channel ownership: notebook:X and memory:X are private to agent X
