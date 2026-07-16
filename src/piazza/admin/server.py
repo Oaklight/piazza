@@ -218,6 +218,7 @@ class AdminServer:
         self._setup_channel_routes()
         self._setup_message_routes()
         self._setup_subscription_routes()
+        self._setup_system_routes()
         self._setup_token_routes()
 
     def _setup_ui_routes(self) -> None:
@@ -415,6 +416,29 @@ class AdminServer:
                 for ch, ids in counts.items()
             ]
             return {"total": sum(c["count"] for c in ch_list), "channels": ch_list}
+
+    def _setup_system_routes(self) -> None:
+        """System/backend info route."""
+        bus = self._bus
+        token_store = self._token_store
+
+        @self._app.get("/api/system")
+        def system_info(request: Any) -> dict:
+            import piazza
+
+            info: dict = {
+                "version": piazza.__version__,
+                "backend": {},
+                "tokens": {"configured": 0},
+            }
+            get_info = getattr(bus.backend, "get_backend_info", None)
+            if get_info:
+                info["backend"] = get_info()
+            else:
+                info["backend"] = {"type": type(bus.backend).__name__}
+            if token_store:
+                info["tokens"]["configured"] = len(token_store.list_tokens())
+            return info
 
     def _setup_token_routes(self) -> None:
         """Token CRUD routes."""

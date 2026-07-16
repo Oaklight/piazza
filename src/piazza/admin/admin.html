@@ -582,6 +582,7 @@ tr:hover { background: var(--accent-light); }
         <button class="tab-btn" onclick="switchTab('messages')">Messages</button>
         <button class="tab-btn" onclick="switchTab('subscriptions')">Subscriptions</button>
         <button class="tab-btn" onclick="switchTab('tokens')">Tokens</button>
+        <button class="tab-btn" onclick="switchTab('system')">System</button>
     </div>
 
     <!-- Dashboard Tab -->
@@ -731,6 +732,10 @@ tr:hover { background: var(--accent-light); }
             </table>
         </div>
     </div>
+    <!-- System Tab -->
+    <div class="tab-content" id="tab-system">
+        <div id="systemInfo" style="color:var(--text-secondary);text-align:center;padding:40px">Loading...</div>
+    </div>
 </div>
 
 <!-- Login Overlay -->
@@ -828,6 +833,7 @@ class PiazzaAPI {
         return this.request('/api/messages', { method: 'POST', body: JSON.stringify(data) });
     }
     async getSubscriptions() { return this.request('/api/subscriptions'); }
+    async getSystemInfo() { return this.request('/api/system'); }
 
     // Token management
     async listTokens() { return this.request('/api/tokens'); }
@@ -900,6 +906,7 @@ function refreshCurrentTab() {
             break;
         case 'subscriptions': loadSubscriptions(); break;
         case 'tokens': loadTokens(); break;
+        case 'system': loadSystem(); break;
     }
 }
 
@@ -1393,6 +1400,57 @@ async function loadSubscriptions() {
         `).join('');
     } catch (e) {
         console.error('Subscriptions load error:', e);
+    }
+}
+
+/* ============== System Tab ============== */
+async function loadSystem() {
+    try {
+        const data = await api.getSystemInfo();
+        const b = data.backend || {};
+        const container = document.getElementById('systemInfo');
+        let backendRows = '';
+        if (b.type === 'sqlite') {
+            backendRows = `
+                <tr><td>DB Path</td><td style="font-family:monospace">${esc(b.db_path)}</td></tr>
+                <tr><td>Journal Mode</td><td>${esc(b.journal_mode)}</td></tr>
+                <tr><td>DB Size</td><td>${b.db_size_mb} MB (${(b.db_size_bytes || 0).toLocaleString()} bytes)</td></tr>
+                ${b.file_size_bytes ? `<tr><td>File Size</td><td>${b.file_size_mb} MB</td></tr>` : ''}
+                ${b.wal_size_bytes ? `<tr><td>WAL Size</td><td>${b.wal_size_mb} MB</td></tr>` : ''}
+                <tr><td>Freelist Pages</td><td>${b.freelist_pages}</td></tr>
+            `;
+        } else if (b.type === 'memory') {
+            backendRows = `<tr><td>Estimated Size</td><td>${b.estimated_size_mb} MB</td></tr>`;
+        }
+        container.innerHTML = `
+            <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+                <div class="stat-card">
+                    <div class="stat-label">Version</div>
+                    <div class="stat-value" style="font-size:1.5rem">${esc(data.version)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Backend</div>
+                    <div class="stat-value" style="font-size:1.5rem">${esc(b.type || 'unknown')}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Tokens</div>
+                    <div class="stat-value" style="font-size:1.5rem">${data.tokens.configured}</div>
+                </div>
+            </div>
+            <div class="table-container">
+                <div class="table-title" style="padding-bottom:8px">Backend Details</div>
+                <table>
+                    <thead><tr><th>Property</th><th>Value</th></tr></thead>
+                    <tbody>
+                        <tr><td>Type</td><td><span class="badge">${esc(b.type)}</span></td></tr>
+                        <tr><td>Total Messages</td><td>${(b.total_messages || 0).toLocaleString()}</td></tr>
+                        <tr><td>Total Channels</td><td>${b.total_channels || 0}</td></tr>
+                        ${backendRows}
+                    </tbody>
+                </table>
+            </div>`;
+    } catch (e) {
+        document.getElementById('systemInfo').textContent = 'Failed to load system info';
     }
 }
 

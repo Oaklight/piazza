@@ -284,5 +284,39 @@ class SQLiteBackend:
             metadata=metadata,
         )
 
+    def get_backend_info(self) -> dict:
+        """Return backend type, config, and usage info."""
+        import os
+
+        info: dict = {
+            "type": "sqlite",
+            "db_path": self._db_path,
+            "journal_mode": "WAL",
+        }
+        with self._lock:
+            info["total_messages"] = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()[
+                0
+            ]
+            info["total_channels"] = self._conn.execute(
+                "SELECT COUNT(DISTINCT channel) FROM messages"
+            ).fetchone()[0]
+            # SQLite page info
+            page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
+            page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
+            info["db_size_bytes"] = page_count * page_size
+            info["db_size_mb"] = round(page_count * page_size / (1024 * 1024), 2)
+            freelist = self._conn.execute("PRAGMA freelist_count").fetchone()[0]
+            info["freelist_pages"] = freelist
+
+        if self._db_path != ":memory:" and os.path.exists(self._db_path):
+            info["file_size_bytes"] = os.path.getsize(self._db_path)
+            info["file_size_mb"] = round(os.path.getsize(self._db_path) / (1024 * 1024), 2)
+            wal_path = self._db_path + "-wal"
+            if os.path.exists(wal_path):
+                info["wal_size_bytes"] = os.path.getsize(wal_path)
+                info["wal_size_mb"] = round(os.path.getsize(wal_path) / (1024 * 1024), 2)
+
+        return info
+
     def __repr__(self) -> str:
         return f"SQLiteBackend({self._db_path!r})"

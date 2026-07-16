@@ -189,6 +189,28 @@ class MemoryBackend:
         result.sort()
         return result
 
+    def get_backend_info(self) -> dict:
+        """Return backend type and usage info."""
+        import sys
+
+        with self._lock:
+            total_msgs = sum(len(msgs) for msgs in self._channels.values())
+            n_channels = len(self._channels)
+            # Rough memory estimate
+            size_bytes = sys.getsizeof(self._channels)
+            for msgs in self._channels.values():
+                size_bytes += sys.getsizeof(msgs)
+                for m in msgs:
+                    size_bytes += sys.getsizeof(m)
+
+        return {
+            "type": "memory",
+            "total_messages": total_msgs,
+            "total_channels": n_channels,
+            "estimated_size_bytes": size_bytes,
+            "estimated_size_mb": round(size_bytes / (1024 * 1024), 2),
+        }
+
     def close(self) -> None:
         """Clear all stored messages."""
         with self._lock:
