@@ -413,3 +413,78 @@ class TestChannelOwnership:
         msg_id = transport.publish("notebook:milo", "admin", "note", "admin override")
         assert msg_id
         transport.close()
+
+
+class TestSystemChannelAccess:
+    """_system:* channel write restrictions."""
+
+    def test_arbitrary_write_to_system_agents_blocked(self, auth_server) -> None:
+        """Regular agents cannot write arbitrary messages to _system:agents."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        url, store = auth_server
+        token = store.create_token("agent-a", "A's token")["token"]
+
+        http = HttpClient(
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            }
+        )
+        resp = http.post(
+            f"{url}/v1/publish",
+            json={
+                "channel": "_system:agents",
+                "sender": "agent-a",
+                "msg_type": "chat",  # not "presence"
+                "payload": "injected",
+            },
+        )
+        assert resp.status_code == 403
+        assert "reserved for system use" in resp.json()["message"]
+        http.close()
+
+    def test_presence_write_to_system_agents_allowed(self, auth_server) -> None:
+        """Agents can write presence to _system:agents (used by SDK _announce)."""
+        url, store = auth_server
+        token = store.create_token("agent-b", "B's token")["token"]
+
+        transport = HttpTransport(url, agent_id="agent-b", token=token)
+        msg_id = transport.publish("_system:agents", "agent-b", "presence", '{"status": "online"}')
+        assert msg_id
+        transport.close()
+
+    def test_write_to_unknown_system_channel_blocked(self, auth_server) -> None:
+        """Agents cannot write to arbitrary _system:* channels."""
+        from piazza._vendor.httpclient import Client as HttpClient
+
+        url, store = auth_server
+        token = store.create_token("agent-c", "C's token")["token"]
+
+        http = HttpClient(
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            }
+        )
+        resp = http.post(
+            f"{url}/v1/publish",
+            json={
+                "channel": "_system:evil",
+                "sender": "agent-c",
+                "msg_type": "presence",
+                "payload": "fake",
+            },
+        )
+        assert resp.status_code == 403
+        http.close()
+
+    def test_supertoken_bypasses_system_restriction(self, auth_server) -> None:
+        """Supertokens can write anything to _system:* channels."""
+        url, store = auth_server
+        super_token = store.create_token(agent_id=None, label="admin")["token"]
+
+        transport = HttpTransport(url, agent_id="admin", token=super_token)
+        msg_id = transport.publish("_system:agents", "admin", "chat", "admin can do anything")
+        assert msg_id
+        transport.close()

@@ -102,8 +102,16 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
     return None
 
 
+# Allowed (channel, msg_type) pairs for _system:* channels.
+# Regular agents can only write to these specific channels with these msg_types.
+_SYSTEM_CHANNEL_ALLOWLIST: dict[str, set[str]] = {
+    "_system:agents": {"presence"},
+    "_system:registry": {"register"},
+}
+
+
 def _validate_and_auth_publish(
-    auth_result: Any, sender: str, channel: str
+    auth_result: Any, sender: str, channel: str, msg_type: str = ""
 ) -> tuple[dict, int] | None:
     """Validate channel name and enforce publish auth.
 
@@ -122,6 +130,15 @@ def _validate_and_auth_publish(
             "error": "Forbidden",
             "message": f"Token bound to '{auth_result}', cannot publish as '{sender}'",
         }, 403
+
+    # System channels: only allow specific msg_types per channel
+    if channel.startswith("_system:"):
+        allowed_types = _SYSTEM_CHANNEL_ALLOWLIST.get(channel)
+        if allowed_types is None or msg_type not in allowed_types:
+            return {
+                "error": "Forbidden",
+                "message": f"Channel '{channel}' is reserved for system use",
+            }, 403
 
     # Broadcast channels: only supertokens can write
     if channel.startswith("broadcast:"):
@@ -322,7 +339,9 @@ class HttpFrontend:
             auth_result = _auth_result_var.get()
             data["channel"] = data["channel"].strip()
             data["sender"] = data["sender"].strip()
-            auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
+            auth_error = _validate_and_auth_publish(
+                auth_result, data["sender"], data["channel"], msg_type=data["msg_type"]
+            )
             if auth_error:
                 return auth_error
 
