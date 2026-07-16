@@ -54,7 +54,7 @@ jobs:
         # The Dockerfile's `COPY dist/ /tmp/dist/` requires the source dir to
         # exist in the build context. In CI we install from PyPI (no local
         # wheel), so create an empty dist/ to make the COPY a harmless no-op.
-        run: mkdir -p dist
+        run: mkdir -p piazza/dist
 
       - name: Wait for PyPI availability
         run: |

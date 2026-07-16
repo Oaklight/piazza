@@ -2,9 +2,10 @@
 
 # Variables
 PACKAGE_NAME := piazza
+PACKAGE_DIR := piazza
 DOCKER_IMAGE := oaklight/piazza
-DIST_DIR := dist
-VERSION := $(shell grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' src/piazza/__init__.py | grep -oE '"[^"]+"' | tr -d '"' || echo "0.0.1")
+DIST_DIR := piazza/dist
+VERSION := $(shell grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' $(PACKAGE_DIR)/src/piazza/__init__.py | grep -oE '"[^"]+"' | tr -d '"' || echo "0.0.1")
 
 # Optional variables
 V ?= $(VERSION)
@@ -20,9 +21,9 @@ all: format lint test
 
 format:
 	@echo "Running ruff check --fix..."
-	ruff check --fix src/ tests/
+	ruff check --fix $(PACKAGE_DIR)/src/ $(PACKAGE_DIR)/tests/
 	@echo "Running ruff format..."
-	ruff format src/ tests/
+	ruff format $(PACKAGE_DIR)/src/ $(PACKAGE_DIR)/tests/
 	@echo "Format complete."
 
 # ──────────────────────────────────────────────
@@ -31,9 +32,9 @@ format:
 
 lint:
 	@echo "Running ruff check..."
-	ruff check src/
+	ruff check $(PACKAGE_DIR)/src/
 	@echo "Running ty check..."
-	ty check
+	cd $(PACKAGE_DIR) && ty check
 	@echo "Type check complete."
 
 # ──────────────────────────────────────────────
@@ -42,7 +43,7 @@ lint:
 
 test:
 	@echo "Running tests..."
-	pytest tests/ -v --tb=short
+	pytest $(PACKAGE_DIR)/tests/ -v --tb=short
 	@echo "Tests completed."
 
 # ──────────────────────────────────────────────
@@ -51,17 +52,17 @@ test:
 
 build-package: clean-package
 	@echo "Building $(PACKAGE_NAME) version $(V)..."
-	python -m build
+	python -m build $(PACKAGE_DIR)/
 	@echo "Build complete. Distribution files are in $(DIST_DIR)/"
 
 push-package:
 	@echo "Pushing $(PACKAGE_NAME) to PyPI..."
-	twine upload dist/*
+	twine upload $(DIST_DIR)/*
 	@echo "Package pushed to PyPI."
 
 clean-package:
 	@echo "Cleaning up build and distribution files..."
-	rm -rf $(DIST_DIR) *.egg-info src/*.egg-info
+	rm -rf $(DIST_DIR) *.egg-info $(PACKAGE_DIR)/src/*.egg-info
 	@echo "Cleanup complete."
 
 # Aliases
@@ -81,15 +82,15 @@ build-docker:
 		BUILD_ARGS="$$BUILD_ARGS --build-arg REGISTRY_MIRROR=$(REGISTRY_MIRROR)"; \
 	fi; \
 	LOCAL_WHEEL=""; \
-	if [ -d "dist" ] && [ -n "$$(ls -A dist/*$(V)*.whl 2>/dev/null)" ]; then \
-		LOCAL_WHEEL=$$(ls dist/*$(V)*.whl | head -n 1 | xargs basename); \
+	if [ -d "$(DIST_DIR)" ] && [ -n "$$(ls -A $(DIST_DIR)/*$(V)*.whl 2>/dev/null)" ]; then \
+		LOCAL_WHEEL=$$(ls $(DIST_DIR)/*$(V)*.whl | head -n 1 | xargs basename); \
 		echo "Found local wheel: $$LOCAL_WHEEL"; \
 		BUILD_ARGS="$$BUILD_ARGS --build-arg LOCAL_WHEEL=$$LOCAL_WHEEL"; \
 	elif echo "$(V)" | grep -qE '^[0-9]+\.[0-9]+'; then \
 		echo "Using version from PyPI: $(V)"; \
 		BUILD_ARGS="$$BUILD_ARGS --build-arg PACKAGE_VERSION=$(V)"; \
-	elif [ -d "dist" ] && [ -n "$$(ls -A dist/*.whl 2>/dev/null)" ]; then \
-		LOCAL_WHEEL=$$(ls dist/*.whl | head -n 1 | xargs basename); \
+	elif [ -d "$(DIST_DIR)" ] && [ -n "$$(ls -A $(DIST_DIR)/*.whl 2>/dev/null)" ]; then \
+		LOCAL_WHEEL=$$(ls $(DIST_DIR)/*.whl | head -n 1 | xargs basename); \
 		echo "Non-version tag '$(V)', using local wheel: $$LOCAL_WHEEL"; \
 		BUILD_ARGS="$$BUILD_ARGS --build-arg LOCAL_WHEEL=$$LOCAL_WHEEL"; \
 	else \
