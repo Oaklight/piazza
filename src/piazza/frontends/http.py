@@ -103,6 +103,38 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
     return None
 
 
+_PUBLISH_REQUIRED_FIELDS = ("channel", "sender", "msg_type", "payload")
+
+
+def _validate_publish_data(data: dict) -> tuple[dict, int] | None:
+    """Check required fields and payload content."""
+    missing = [f for f in _PUBLISH_REQUIRED_FIELDS if f not in data]
+    if missing:
+        return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
+    return _validate_payload(data["payload"])
+
+
+def _validate_payload(payload: Any) -> tuple[dict, int] | None:
+    """Reject empty or whitespace-only string payloads."""
+    if isinstance(payload, str) and not payload.strip():
+        return {"error": "Bad Request", "message": "Payload must not be empty"}, 400
+    return None
+
+
+def _parse_limit(request: Any, max_limit: int) -> int | tuple[dict, int]:
+    """Parse and validate the 'limit' query parameter.
+
+    Returns the clamped limit or an error tuple.
+    """
+    try:
+        raw = int((request.query_params.get("limit") or ["100"])[0])
+    except ValueError:
+        return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
+    if raw < 1:
+        return {"error": "Bad Request", "message": "'limit' must be >= 1"}, 400
+    return min(raw, max_limit)
+
+
 def _validate_and_auth_publish(
     auth_result: Any, sender: str, channel: str
 ) -> tuple[dict, int] | None:
@@ -123,6 +155,22 @@ def _validate_and_auth_publish(
             "error": "Forbidden",
             "message": f"Token bound to '{auth_result}', cannot publish as '{sender}'",
         }, 403
+
+    # System channels: agents can only write to their own system channels
+    if channel.startswith("_system:"):
+        # Allow: _system:agents (presence announce from own agent)
+        # Allow: _system:cursors:{agent_id} (own cursor persistence)
+        # Allow: _system:registry (self-registration)
+        allowed_system = (
+            "_system:agents",
+            f"_system:cursors:{auth_result}",
+            "_system:registry",
+        )
+        if channel not in allowed_system:
+            return {
+                "error": "Forbidden",
+                "message": f"Channel '{channel}' is reserved for system use",
+            }, 403
 
     # Broadcast channels: only supertokens can write
     if channel.startswith("broadcast:"):
@@ -315,14 +363,14 @@ class HttpFrontend:
         @self._app.post("/v1/publish")
         async def publish(request: Request) -> dict | tuple:
             data = request.json()
-            required = ("channel", "sender", "msg_type", "payload")
-            missing = [f for f in required if f not in data]
-            if missing:
-                return {"error": "Bad Request", "message": f"Missing: {', '.join(missing)}"}, 400
+            err = _validate_publish_data(data)
+            if err:
+                return err
 
             auth_result = _auth_result_var.get()
             data["channel"] = data["channel"].strip()
             data["sender"] = data["sender"].strip()
+
             auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
             if auth_error:
                 return auth_error
@@ -344,13 +392,10 @@ class HttpFrontend:
                 return {"error": "Bad Request", "message": "Query param 'channel' required"}, 400
 
             after = (request.query_params.get("after") or [None])[0]
-            try:
-                limit = min(
-                    int((request.query_params.get("limit") or ["100"])[0]),
-                    max_query_limit,
-                )
-            except ValueError:
-                return {"error": "Bad Request", "message": "'limit' must be an integer"}, 400
+            limit_or_err = _parse_limit(request, max_query_limit)
+            if isinstance(limit_or_err, tuple):
+                return limit_or_err
+            limit = limit_or_err
 
             msgs = await asyncio.to_thread(bus.poll, channel, after=after, limit=limit)
 
