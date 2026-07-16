@@ -48,9 +48,9 @@ _PUBLIC_PATHS = frozenset({"/health", "/v1/auth/check"})
 #   end with [a-z0-9], no consecutive special chars
 # - System/auto channels (_system:, dm:, notebook:, memory:, broadcast:)
 #   are exempt from user rules — validated separately
-# Unicode letters (+) allowed for non-English channel names
-_USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w:.-]{1,62}[\w]$")
-_NO_CONSECUTIVE_SPECIALS = re.compile(r"[:._{}-]{2}")
+# User channels: no colons (reserved for system prefixes), Unicode letters OK
+_USER_CHANNEL_RE = re.compile(r"^(?=[^\W\d_])[\w.-]{1,62}[\w]$")
+_NO_CONSECUTIVE_SPECIALS = re.compile(r"[._{}-]{2}")
 _RESERVED_PREFIXES = ("_system:", "dm:", "notebook:", "memory:", "broadcast:")
 _SYSTEM_CHANNEL_RE = re.compile(r"^[\w_][\w:.-]{1,126}[\w]$")
 
@@ -83,8 +83,8 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
         if len(channel) < 3 or not _USER_CHANNEL_RE.match(channel):
             return {
                 "error": "Bad Request",
-                "message": "Channel name must be 3-64 chars, start/end with letter or digit, "
-                "lowercase, no trailing specials",
+                "message": "Channel name must be 3-64 chars, start with letter, end with letter/digit, "
+                "lowercase, no colons (reserved for system prefixes)",
             }, 400
         if not any(c.isalpha() for c in channel):
             return {

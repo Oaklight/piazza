@@ -915,7 +915,7 @@ async function loadDashboard() {
 
         // Channel breakdown table
         const tbody = document.getElementById('channelBreakdown');
-        tbody.innerHTML = stats.channel_breakdown.map(ch => `
+        tbody.innerHTML = stats.channel_breakdown.filter(ch => !ch.channel.startsWith('_system:')).map(ch => `
             <tr>
                 <td><strong>${esc(ch.channel)}</strong></td>
                 <td>${ch.message_count.toLocaleString()}</td>
