@@ -23,7 +23,7 @@ RUN apk add --no-cache su-exec
 
 # Copy only the dist/ directory for local wheels (never copy the full tree —
 # even with .dockerignore, a broad COPY risks leaking secrets into layers).
-COPY dist/ /tmp/dist/
+COPY piazza/dist/ /tmp/dist/
 
 # Install piazza: local wheel > specific version > latest from PyPI
 #
