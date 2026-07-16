@@ -413,3 +413,41 @@ class TestChannelOwnership:
         msg_id = transport.publish("notebook:milo", "admin", "note", "admin override")
         assert msg_id
         transport.close()
+
+
+class TestPayloadValidation:
+    """Empty and whitespace-only payload rejection."""
+
+    def test_empty_payload_rejected(self, server_url: str) -> None:
+        """Empty string payload should be rejected with 400."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("test-chan", "")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_whitespace_only_payload_rejected(self, server_url: str) -> None:
+        """Whitespace-only payload should be rejected with 400."""
+        from piazza.transport_http import PiazzaAPIError
+
+        client = PiazzaClient(server_url, "validator")
+        with pytest.raises(PiazzaAPIError) as exc_info:
+            client.channel_send("test-chan", "   \n\t  ")
+        assert exc_info.value.status_code == 400
+        client.close()
+
+    def test_valid_payload_accepted(self, server_url: str) -> None:
+        """Normal payload should be accepted."""
+        client = PiazzaClient(server_url, "validator")
+        msg_id = client.channel_send("test-chan", "hello world")
+        assert msg_id
+        client.close()
+
+    def test_payload_with_leading_whitespace_accepted(self, server_url: str) -> None:
+        """Payload with content + leading whitespace should pass."""
+        client = PiazzaClient(server_url, "validator")
+        msg_id = client.channel_send("test-chan", "  has content  ")
+        assert msg_id
+        client.close()

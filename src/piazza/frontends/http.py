@@ -103,15 +103,19 @@ def _validate_channel_name(channel: str) -> tuple[dict, int] | None:
 
 
 def _validate_and_auth_publish(
-    auth_result: Any, sender: str, channel: str
+    auth_result: Any, sender: str, channel: str, payload: Any = None
 ) -> tuple[dict, int] | None:
-    """Validate channel name and enforce publish auth.
+    """Validate channel name, payload, and enforce publish auth.
 
     Returns error tuple or None if OK.
     """
     err = _validate_channel_name(channel)
     if err:
         return err
+
+    # Reject empty / whitespace-only payloads
+    if isinstance(payload, str) and not payload.strip():
+        return {"error": "Bad Request", "message": "Payload must not be empty"}, 400
 
     if not isinstance(auth_result, str):
         return None
@@ -322,7 +326,9 @@ class HttpFrontend:
             auth_result = _auth_result_var.get()
             data["channel"] = data["channel"].strip()
             data["sender"] = data["sender"].strip()
-            auth_error = _validate_and_auth_publish(auth_result, data["sender"], data["channel"])
+            auth_error = _validate_and_auth_publish(
+                auth_result, data["sender"], data["channel"], payload=data["payload"]
+            )
             if auth_error:
                 return auth_error
 
