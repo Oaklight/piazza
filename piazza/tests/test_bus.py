@@ -2,6 +2,7 @@
 
 import json
 import multiprocessing as mp
+import multiprocessing.synchronize
 import sqlite3
 import time
 
@@ -20,7 +21,7 @@ from piazza import (
 def _concurrent_open_worker(
     db_path: str,
     idx: int,
-    start_evt: mp.Event,
+    start_evt: multiprocessing.synchronize.Event,
     q: mp.Queue,  # type: ignore[type-arg]
 ) -> None:
     """Module-level worker for test_concurrent_cold_start.
