@@ -156,6 +156,7 @@ class TestIrcToPiazza:
         assert msgs[0].sender == "alice"
         assert msgs[0].payload == "hello world"
         assert msgs[0].msg_type == "text"
+        assert msgs[0].metadata is not None
         assert msgs[0].metadata["source"] == "irc"
         assert msgs[0].metadata["irc_nick"] == "alice"
 

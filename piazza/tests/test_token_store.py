@@ -113,6 +113,7 @@ class TestRotate:
         old_token = entry["token"]
 
         result = store.rotate_token(entry["id"])
+        assert result is not None
         assert store.validate(old_token) is False
         assert store.validate(result["token"]) == "agent-alice"
 

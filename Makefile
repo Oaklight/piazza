@@ -34,7 +34,7 @@ lint:
 	@echo "Running ruff check..."
 	ruff check $(PACKAGE_DIR)/src/
 	@echo "Running ty check..."
-	cd $(PACKAGE_DIR) && ty check
+	ty check --project $(PACKAGE_DIR)
 	@echo "Type check complete."
 
 # ──────────────────────────────────────────────
