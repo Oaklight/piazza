@@ -30,8 +30,10 @@ class Transport(Protocol):
         """Publish a message. Returns message ID."""
         ...
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        """Claim the oldest unclaimed message."""
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        """Claim the oldest unclaimed/lease-expired message."""
         ...
 
     def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
@@ -108,9 +110,11 @@ class LocalTransport:
         """Publish via the local bus."""
         return self._bus.publish(channel, sender, msg_type, payload, metadata, queue=queue)
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
         """Claim via the local bus."""
-        return self._bus.claim(channel, claimed_by)
+        return self._bus.claim(channel, claimed_by, lease_seconds=lease_seconds)
 
     def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
         """Ack via the local bus."""

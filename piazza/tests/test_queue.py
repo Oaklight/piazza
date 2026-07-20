@@ -196,6 +196,39 @@ class TestRetireCompleted:
         assert stats["unclaimed"] == 1
 
 
+class TestLeaseTimeout:
+    def test_expired_lease_reclaimable(self, bus):
+        bus.publish("jobs", "admin", "task", "leased", queue=True)
+        r1 = bus.claim("jobs", "worker-1", lease_seconds=0)
+        assert r1 is not None
+        assert r1.claimed_by == "worker-1"
+
+        r2 = bus.claim("jobs", "worker-2", lease_seconds=300)
+        assert r2 is not None
+        assert r2.claimed_by == "worker-2"
+        assert r2.message.id == r1.message.id
+
+    def test_active_lease_not_reclaimable(self, bus):
+        bus.publish("jobs", "admin", "task", "leased", queue=True)
+        bus.claim("jobs", "worker-1", lease_seconds=300)
+        assert bus.claim("jobs", "worker-2") is None
+
+    def test_ack_after_lease_expired_still_works(self, bus):
+        bus.publish("jobs", "admin", "task", "leased", queue=True)
+        r1 = bus.claim("jobs", "worker-1", lease_seconds=0)
+        assert r1 is not None
+        acked = bus.ack(r1.message.id, "worker-1")
+        assert acked is not None
+        assert acked.status == "completed"
+
+    def test_reclaimed_message_original_cant_ack(self, bus):
+        bus.publish("jobs", "admin", "task", "leased", queue=True)
+        r1 = bus.claim("jobs", "worker-1", lease_seconds=0)
+        assert r1 is not None
+        bus.claim("jobs", "worker-2", lease_seconds=300)
+        assert bus.ack(r1.message.id, "worker-1") is None
+
+
 class TestClientQueueAPI:
     def test_client_queue_publish_claim_ack(self):
         from piazza import PiazzaClient

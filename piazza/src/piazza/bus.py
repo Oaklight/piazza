@@ -231,9 +231,11 @@ class Bus:
             self._admin_server.stop()
             self._admin_server = None
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        """Atomically claim the oldest unclaimed message from a channel."""
-        return self._backend.claim(channel, claimed_by)
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        """Atomically claim the oldest unclaimed/lease-expired message."""
+        return self._backend.claim(channel, claimed_by, lease_seconds=lease_seconds)
 
     def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
         """Mark a claimed message as completed."""

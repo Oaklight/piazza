@@ -197,15 +197,25 @@ class MemoryBackend:
         result.sort()
         return result
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        claimed_at = datetime.now(timezone.utc).isoformat()
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        now = datetime.now(timezone.utc)
+        claimed_at = now.isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).isoformat()
         with self._lock:
             for msg in self._messages.get(channel, []):
                 qs = self._queue_status.get(msg.id)
-                if qs and qs["status"] == "unclaimed":
+                if not qs:
+                    continue
+                claimable = qs["status"] == "unclaimed" or (
+                    qs["status"] == "claimed" and qs.get("lease_until", "") < claimed_at
+                )
+                if claimable:
                     qs["status"] = "claimed"
                     qs["claimed_by"] = claimed_by
                     qs["claimed_at"] = claimed_at
+                    qs["lease_until"] = lease_until
                     return ClaimResult(
                         message=msg,
                         status="claimed",

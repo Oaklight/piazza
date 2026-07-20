@@ -575,7 +575,10 @@ class HttpFrontend:
             if err:
                 return err
 
-            result = await asyncio.to_thread(bus.claim, data["channel"], claimed_by)
+            lease = int(data.get("lease_seconds", 300))
+            result = await asyncio.to_thread(
+                bus.claim, data["channel"], claimed_by, lease_seconds=lease
+            )
             if result is None:
                 return {"claimed": False}
             return {"claimed": True, "result": _claim_result_to_dict(result)}

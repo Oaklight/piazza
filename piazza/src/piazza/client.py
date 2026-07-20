@@ -662,7 +662,7 @@ class PiazzaClient:
             channel, self._agent_id, msg_type, content, metadata, queue=True
         )
 
-    def queue_claim(self, channel: str) -> ClaimResult | None:
+    def queue_claim(self, channel: str, *, lease_seconds: int = 300) -> ClaimResult | None:
         """Claim the oldest unclaimed message from a channel.
 
         Args:
@@ -671,7 +671,7 @@ class PiazzaClient:
         Returns:
             ClaimResult with the claimed message, or None if empty.
         """
-        return self._transport.claim(channel, self._agent_id)
+        return self._transport.claim(channel, self._agent_id, lease_seconds=lease_seconds)
 
     def queue_ack(self, message_id: str) -> ClaimResult | None:
         """Acknowledge a claimed message as completed.
