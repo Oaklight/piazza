@@ -19,6 +19,7 @@ class MemoryBackend:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._messages: dict[str, list[Message]] = defaultdict(list)
+        self._messages_by_id: dict[str, Message] = {}
         self._queue_status: dict[str, dict] = {}
 
     def store(self, message: Message, *, queue: bool = False) -> None:
@@ -30,6 +31,7 @@ class MemoryBackend:
         """
         with self._lock:
             self._messages[message.channel].append(message)
+            self._messages_by_id[message.id] = message
             if queue:
                 self._queue_status[message.id] = {
                     "status": "unclaimed",
@@ -230,16 +232,15 @@ class MemoryBackend:
             if not qs or qs["status"] != "claimed" or qs["claimed_by"] != claimed_by:
                 return None
             qs["status"] = "completed"
-            for msgs in self._messages.values():
-                for msg in msgs:
-                    if msg.id == message_id:
-                        return ClaimResult(
-                            message=msg,
-                            status="completed",
-                            claimed_by=qs["claimed_by"],
-                            claimed_at=qs["claimed_at"],
-                        )
-        return None
+            msg = self._messages_by_id.get(message_id)
+            if msg is None:
+                return None
+            return ClaimResult(
+                message=msg,
+                status="completed",
+                claimed_by=qs["claimed_by"],
+                claimed_at=qs["claimed_at"],
+            )
 
     def get_queue_stats(self, channel: str | None = None) -> dict:
         result = {"unclaimed": 0, "claimed": 0, "completed": 0}
@@ -285,6 +286,7 @@ class MemoryBackend:
             deleted += before - len(self._messages[ch])
         for mid in to_remove:
             self._queue_status.pop(mid, None)
+            self._messages_by_id.pop(mid, None)
         return deleted
 
     def get_backend_info(self) -> dict:
@@ -312,6 +314,7 @@ class MemoryBackend:
         """Clear all stored messages."""
         with self._lock:
             self._messages.clear()
+            self._messages_by_id.clear()
             self._queue_status.clear()
 
     def __repr__(self) -> str:
