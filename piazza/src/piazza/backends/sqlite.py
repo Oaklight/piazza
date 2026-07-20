@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -82,7 +83,8 @@ class SQLiteBackend:
             ("lease_until", "TEXT"),
         ]:
             if col not in existing:
-                self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_channel_status ON messages (channel, status, id)"
         )
