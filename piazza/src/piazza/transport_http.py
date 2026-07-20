@@ -106,12 +106,14 @@ class HttpTransport:
         self._check_response(resp)
         return resp.json()["message_id"]
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        """Claim the oldest unclaimed message from a channel."""
-        resp = self._http.post(
-            f"{self._base_url}/v1/claim",
-            json={"channel": channel, "claimed_by": claimed_by},
-        )
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        """Claim the oldest unclaimed/lease-expired message."""
+        body: dict = {"channel": channel, "claimed_by": claimed_by}
+        if lease_seconds != 300:
+            body["lease_seconds"] = lease_seconds
+        resp = self._http.post(f"{self._base_url}/v1/claim", json=body)
         self._check_response(resp)
         data = resp.json()
         if not data.get("claimed"):

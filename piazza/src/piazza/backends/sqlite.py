@@ -75,7 +75,12 @@ class SQLiteBackend:
 
     def _ensure_queue_columns(self) -> None:
         existing = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
-        for col, col_type in [("status", "TEXT"), ("claimed_by", "TEXT"), ("claimed_at", "TEXT")]:
+        for col, col_type in [
+            ("status", "TEXT"),
+            ("claimed_by", "TEXT"),
+            ("claimed_at", "TEXT"),
+            ("lease_until", "TEXT"),
+        ]:
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
         self._conn.execute(
@@ -297,18 +302,23 @@ class SQLiteBackend:
             metadata=metadata,
         )
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        claimed_at = datetime.now(timezone.utc).isoformat()
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        now = datetime.now(timezone.utc)
+        claimed_at = now.isoformat()
+        lease_until = (now + timedelta(seconds=lease_seconds)).isoformat()
         with self._lock:
             cursor = self._conn.execute(
                 "UPDATE messages "
-                "SET status = 'claimed', claimed_by = ?, claimed_at = ? "
+                "SET status = 'claimed', claimed_by = ?, claimed_at = ?, lease_until = ? "
                 "WHERE id = ("
                 "  SELECT id FROM messages "
-                "  WHERE channel = ? AND status = 'unclaimed' "
+                "  WHERE channel = ? AND "
+                "    (status = 'unclaimed' OR (status = 'claimed' AND lease_until < ?)) "
                 "  ORDER BY id ASC LIMIT 1"
                 ") RETURNING *",
-                (claimed_by, claimed_at, channel),
+                (claimed_by, claimed_at, lease_until, channel, claimed_at),
             )
             row = cursor.fetchone()
             self._conn.commit()

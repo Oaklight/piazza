@@ -107,8 +107,10 @@ class Backend(Protocol):
         """
         ...
 
-    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
-        """Atomically claim the oldest unclaimed message in a channel."""
+    def claim(
+        self, channel: str, claimed_by: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        """Atomically claim the oldest unclaimed/lease-expired message."""
         ...
 
     def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:

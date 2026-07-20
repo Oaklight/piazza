@@ -250,8 +250,12 @@ class PiazzaClient:
             channel, self._agent_id, msg_type, content, metadata, queue=True
         )
 
-    def queue_claim(self, channel: str) -> ClaimResult | None:
-        return self._transport.claim(channel, self._agent_id)
+    def queue_claim(
+        self, channel: str, *, lease_seconds: int = 300
+    ) -> ClaimResult | None:
+        return self._transport.claim(
+            channel, self._agent_id, lease_seconds=lease_seconds
+        )
 
     def queue_ack(self, message_id: str) -> ClaimResult | None:
         return self._transport.ack(message_id, self._agent_id)
