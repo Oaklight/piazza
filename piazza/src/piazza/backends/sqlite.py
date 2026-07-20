@@ -10,7 +10,7 @@ from pathlib import Path
 
 from piazza._vendor.retry import retry
 from piazza._vendor.structlog import get_logger
-from piazza.types import Message
+from piazza.types import ClaimResult, Message
 
 logger = get_logger(__name__)
 
@@ -55,6 +55,7 @@ class SQLiteBackend:
         # racing each other.
         self._enable_wal()
         self._conn.executescript(_SCHEMA)
+        self._ensure_queue_columns()
         self._conn.commit()
 
     @retry(
@@ -72,17 +73,28 @@ class SQLiteBackend:
         """Enable WAL journal mode with automatic retry on lock contention."""
         self._conn.execute("PRAGMA journal_mode=WAL")
 
-    def store(self, message: Message) -> None:
+    def _ensure_queue_columns(self) -> None:
+        existing = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
+        for col, col_type in [("status", "TEXT"), ("claimed_by", "TEXT"), ("claimed_at", "TEXT")]:
+            if col not in existing:
+                self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_status ON messages (channel, status, id)"
+        )
+
+    def store(self, message: Message, *, queue: bool = False) -> None:
         """Persist a message to SQLite.
 
         Args:
             message: Message to store.
         """
         meta_json = json.dumps(message.metadata) if message.metadata else None
+        status = "unclaimed" if queue else None
         with self._lock:
             self._conn.execute(
-                "INSERT INTO messages (id, channel, sender, msg_type, payload, timestamp, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages "
+                "(id, channel, sender, msg_type, payload, timestamp, metadata, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     message.id,
                     message.channel,
@@ -91,6 +103,7 @@ class SQLiteBackend:
                     message.payload,
                     message.timestamp,
                     meta_json,
+                    status,
                 ),
             )
             self._conn.commit()
@@ -283,6 +296,93 @@ class SQLiteBackend:
             timestamp=row["timestamp"],
             metadata=metadata,
         )
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        claimed_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE messages "
+                "SET status = 'claimed', claimed_by = ?, claimed_at = ? "
+                "WHERE id = ("
+                "  SELECT id FROM messages "
+                "  WHERE channel = ? AND status = 'unclaimed' "
+                "  ORDER BY id ASC LIMIT 1"
+                ") RETURNING *",
+                (claimed_by, claimed_at, channel),
+            )
+            row = cursor.fetchone()
+            self._conn.commit()
+            if row is None:
+                return None
+            return ClaimResult(
+                message=self._row_to_message(row),
+                status="claimed",
+                claimed_by=claimed_by,
+                claimed_at=claimed_at,
+            )
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE messages SET status = 'completed' "
+                "WHERE id = ? AND claimed_by = ? AND status = 'claimed' "
+                "RETURNING *",
+                (message_id, claimed_by),
+            )
+            row = cursor.fetchone()
+            self._conn.commit()
+            if row is None:
+                return None
+            return ClaimResult(
+                message=self._row_to_message(row),
+                status="completed",
+                claimed_by=row["claimed_by"],
+                claimed_at=row["claimed_at"],
+            )
+
+    def get_queue_stats(self, channel: str | None = None) -> dict:
+        with self._lock:
+            if channel:
+                rows = self._conn.execute(
+                    "SELECT status, COUNT(*) FROM messages "
+                    "WHERE channel = ? AND status IS NOT NULL GROUP BY status",
+                    (channel,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT status, COUNT(*) FROM messages "
+                    "WHERE status IS NOT NULL GROUP BY status",
+                ).fetchall()
+        result = {"unclaimed": 0, "claimed": 0, "completed": 0}
+        for row in rows:
+            if row[0] in result:
+                result[row[0]] = row[1]
+        return result
+
+    def retire_completed(self, max_age_seconds: int = 86400, max_per_channel: int = 1000) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM messages WHERE status = 'completed' AND claimed_at < ?",
+                (cutoff,),
+            )
+            deleted = cur.rowcount
+            channels = self._conn.execute(
+                "SELECT DISTINCT channel FROM messages WHERE status = 'completed'"
+            ).fetchall()
+            for (ch,) in channels:
+                cur2 = self._conn.execute(
+                    "DELETE FROM messages WHERE status = 'completed' AND channel = ? "
+                    "AND id NOT IN ("
+                    "  SELECT id FROM messages "
+                    "  WHERE status = 'completed' AND channel = ? "
+                    "  ORDER BY id DESC LIMIT ?"
+                    ")",
+                    (ch, ch, max_per_channel),
+                )
+                deleted += cur2.rowcount
+            self._conn.commit()
+        return deleted
 
     def get_backend_info(self) -> dict:
         """Return backend type, config, and usage info."""

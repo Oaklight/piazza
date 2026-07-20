@@ -289,6 +289,44 @@ async def _handle_registry_lookup(request: Any, bus: Any) -> dict | tuple:
     return {"found": False, "agent_id": agent_id}
 
 
+def _parse_queue_body(request: Any, required_field: str) -> tuple[dict, tuple | None]:
+    """Parse JSON body and validate a required field for queue endpoints."""
+    try:
+        data = request.json()
+    except Exception:
+        return {}, ({"error": "Bad Request", "message": "Invalid JSON"}, 400)
+    if not isinstance(data, dict):
+        return {}, ({"error": "Bad Request", "message": "Invalid JSON"}, 400)
+    value = data.get(required_field, "").strip()
+    if not value:
+        return {}, ({"error": "Bad Request", "message": f"Missing '{required_field}'"}, 400)
+    data[required_field] = value
+    return data, None
+
+
+def _resolve_claimed_by(data: dict) -> tuple[str, tuple | None]:
+    """Resolve claimed_by from auth context or request body."""
+    auth_result = _auth_result_var.get()
+    if auth_result is False:
+        return "", ({"error": "Unauthorized", "message": "Valid token required"}, 401)
+    if isinstance(auth_result, str):
+        return auth_result, None
+    claimed_by = data.get("claimed_by", "").strip()
+    if not claimed_by:
+        return "", ({"error": "Bad Request", "message": "Missing 'claimed_by'"}, 400)
+    return claimed_by, None
+
+
+def _claim_result_to_dict(result: Any) -> dict[str, Any]:
+    """Serialize a ClaimResult to a dict."""
+    return {
+        "message": _msg_to_dict(result.message),
+        "status": result.status,
+        "claimed_by": result.claimed_by,
+        "claimed_at": result.claimed_at,
+    }
+
+
 def _msg_to_dict(m: Message) -> dict[str, Any]:
     """Serialize a Message to a dict."""
     return {
@@ -348,6 +386,7 @@ class HttpFrontend:
         self._bus = bus
         self._setup_middleware()
         self._setup_api_routes()
+        self._setup_queue_routes()
         self._setup_sse_route()
 
     def serve_forever(self) -> None:
@@ -481,6 +520,7 @@ class HttpFrontend:
                 msg_type=data["msg_type"],
                 payload=data["payload"],
                 metadata=data.get("metadata"),
+                queue=bool(data.get("queue")),
             )
             return {"message_id": msg_id}
 
@@ -520,6 +560,39 @@ class HttpFrontend:
         @self._app.get("/v1/registry/lookup")
         async def registry_lookup(request: Request) -> dict | tuple:
             return await _handle_registry_lookup(request, bus)
+
+    def _setup_queue_routes(self) -> None:
+        """Register queue (claim/ack) routes."""
+        bus = self._bus
+        assert bus is not None
+
+        @self._app.post("/v1/claim")
+        async def claim(request: Request) -> dict | tuple:
+            data, err = _parse_queue_body(request, "channel")
+            if err:
+                return err
+            claimed_by, err = _resolve_claimed_by(data)
+            if err:
+                return err
+
+            result = await asyncio.to_thread(bus.claim, data["channel"], claimed_by)
+            if result is None:
+                return {"claimed": False}
+            return {"claimed": True, "result": _claim_result_to_dict(result)}
+
+        @self._app.post("/v1/ack")
+        async def ack(request: Request) -> dict | tuple:
+            data, err = _parse_queue_body(request, "message_id")
+            if err:
+                return err
+            claimed_by, err = _resolve_claimed_by(data)
+            if err:
+                return err
+
+            result = await asyncio.to_thread(bus.ack, data["message_id"], claimed_by)
+            if result is None:
+                return {"acked": False}
+            return {"acked": True, "result": _claim_result_to_dict(result)}
 
     def _setup_sse_route(self) -> None:
         """Register the SSE subscribe route."""

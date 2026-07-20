@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from piazza.types import Message
+from piazza.types import ClaimResult, Message
 
 
 class Backend(Protocol):
@@ -20,8 +20,8 @@ class Backend(Protocol):
     MQTT, or pure in-memory storage.
     """
 
-    def store(self, message: Message) -> None:
-        """Persist a message."""
+    def store(self, message: Message, *, queue: bool = False) -> None:
+        """Persist a message. If queue=True, mark as claimable."""
         ...
 
     def query(
@@ -105,6 +105,22 @@ class Backend(Protocol):
         Returns:
             List of ISO 8601 timestamp strings, sorted ascending.
         """
+        ...
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        """Atomically claim the oldest unclaimed message in a channel."""
+        ...
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        """Mark a claimed message as completed."""
+        ...
+
+    def get_queue_stats(self, channel: str | None = None) -> dict:
+        """Return queue status counts (unclaimed, claimed, completed)."""
+        ...
+
+    def retire_completed(self, max_age_seconds: int = 86400, max_per_channel: int = 1000) -> int:
+        """Remove old completed queue messages. Returns count deleted."""
         ...
 
 
