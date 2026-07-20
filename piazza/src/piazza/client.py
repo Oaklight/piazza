@@ -20,7 +20,7 @@ from piazza.transport import LocalTransport
 
 if TYPE_CHECKING:
     from piazza.transport import Transport
-    from piazza.types import Message
+    from piazza.types import ClaimResult, Message
 
 # agent_id regex: lowercase alphanumeric + hyphens, 3-64 chars,
 # must start and end with alphanumeric
@@ -637,6 +637,52 @@ class PiazzaClient:
             Messages in chronological order.
         """
         return self.channel_read(f"broadcast:{topic}", limit=limit)
+
+    # ── Sugar API: Queue ──────────────────────────────────────────
+
+    def queue_publish(
+        self,
+        channel: str,
+        content: str,
+        msg_type: str = "task",
+        metadata: dict | None = None,
+    ) -> str:
+        """Publish a claimable task to a channel.
+
+        Args:
+            channel: Target channel.
+            content: Task payload.
+            msg_type: Message type. Defaults to "task".
+            metadata: Optional extra fields.
+
+        Returns:
+            The message ID.
+        """
+        return self._transport.publish(
+            channel, self._agent_id, msg_type, content, metadata, queue=True
+        )
+
+    def queue_claim(self, channel: str) -> ClaimResult | None:
+        """Claim the oldest unclaimed message from a channel.
+
+        Args:
+            channel: Channel to claim from.
+
+        Returns:
+            ClaimResult with the claimed message, or None if empty.
+        """
+        return self._transport.claim(channel, self._agent_id)
+
+    def queue_ack(self, message_id: str) -> ClaimResult | None:
+        """Acknowledge a claimed message as completed.
+
+        Args:
+            message_id: ID of the message to ack.
+
+        Returns:
+            ClaimResult with status "completed", or None.
+        """
+        return self._transport.ack(message_id, self._agent_id)
 
     # ── Sugar API: Notifications ──────────────────────────────────
 

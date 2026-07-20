@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from piazza.bus import Bus
-    from piazza.types import Message
+    from piazza.types import ClaimResult, Message
 
 
 class Transport(Protocol):
@@ -24,8 +24,18 @@ class Transport(Protocol):
         msg_type: str,
         payload: str,
         metadata: dict | None = None,
+        *,
+        queue: bool = False,
     ) -> str:
         """Publish a message. Returns message ID."""
+        ...
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        """Claim the oldest unclaimed message."""
+        ...
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        """Ack a claimed message."""
         ...
 
     def query(
@@ -92,9 +102,19 @@ class LocalTransport:
         msg_type: str,
         payload: str,
         metadata: dict | None = None,
+        *,
+        queue: bool = False,
     ) -> str:
         """Publish via the local bus."""
-        return self._bus.publish(channel, sender, msg_type, payload, metadata)
+        return self._bus.publish(channel, sender, msg_type, payload, metadata, queue=queue)
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        """Claim via the local bus."""
+        return self._bus.claim(channel, claimed_by)
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        """Ack via the local bus."""
+        return self._bus.ack(message_id, claimed_by)
 
     def query(
         self,

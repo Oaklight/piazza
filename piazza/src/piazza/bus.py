@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from piazza.backends import SQLiteBackend
 from piazza.protocols import Backend
 from piazza.serializers import JSONSerializer
-from piazza.types import Message
+from piazza.types import ClaimResult, Message
 
 if TYPE_CHECKING:
     from piazza.admin.server import AdminInfo
@@ -109,6 +109,8 @@ class Bus:
         msg_type: str,
         payload: str,
         metadata: dict | None = None,
+        *,
+        queue: bool = False,
     ) -> str:
         """Publish a message to a channel.
 
@@ -135,7 +137,7 @@ class Bus:
             metadata=metadata,
         )
 
-        self._backend.store(msg)
+        self._backend.store(msg, queue=queue)
 
         # Notify in-process subscribers (snapshot to avoid mutation during iteration)
         for callback in list(self._subs.get(channel, {}).values()):
@@ -228,6 +230,14 @@ class Bus:
         if hasattr(self, "_admin_server") and self._admin_server:
             self._admin_server.stop()
             self._admin_server = None
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        """Atomically claim the oldest unclaimed message from a channel."""
+        return self._backend.claim(channel, claimed_by)
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        """Mark a claimed message as completed."""
+        return self._backend.ack(message_id, claimed_by)
 
     def close(self) -> None:
         """Release resources held by the backend."""

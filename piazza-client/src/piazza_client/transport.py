@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 from piazza_client._vendor.httpclient import Client as HttpClient
 from piazza_client._vendor.sse import SSEClient
-from piazza_client.types import Message
+from piazza_client.types import ClaimResult, Message
 
 
 class PiazzaAPIError(Exception):
@@ -83,13 +83,15 @@ class HttpTransport:
         msg_type: str,
         payload: str,
         metadata: dict | None = None,
+        *,
+        queue: bool = False,
     ) -> str:
         """Publish a message via the remote server.
 
         Returns:
             The message ID assigned by the server.
         """
-        body = {
+        body: dict = {
             "channel": channel,
             "sender": sender,
             "msg_type": msg_type,
@@ -97,10 +99,46 @@ class HttpTransport:
         }
         if metadata:
             body["metadata"] = metadata
+        if queue:
+            body["queue"] = True
 
         resp = self._http.post(f"{self._base_url}/v1/publish", json=body)
         self._check_response(resp)
         return resp.json()["message_id"]
+
+    def claim(self, channel: str, claimed_by: str) -> ClaimResult | None:
+        resp = self._http.post(
+            f"{self._base_url}/v1/claim",
+            json={"channel": channel, "claimed_by": claimed_by},
+        )
+        self._check_response(resp)
+        data = resp.json()
+        if not data.get("claimed"):
+            return None
+        r = data["result"]
+        return ClaimResult(
+            message=self._dict_to_msg(r["message"]),
+            status=r["status"],
+            claimed_by=r["claimed_by"],
+            claimed_at=r["claimed_at"],
+        )
+
+    def ack(self, message_id: str, claimed_by: str) -> ClaimResult | None:
+        resp = self._http.post(
+            f"{self._base_url}/v1/ack",
+            json={"message_id": message_id, "claimed_by": claimed_by},
+        )
+        self._check_response(resp)
+        data = resp.json()
+        if not data.get("acked"):
+            return None
+        r = data["result"]
+        return ClaimResult(
+            message=self._dict_to_msg(r["message"]),
+            status=r["status"],
+            claimed_by=r["claimed_by"],
+            claimed_at=r["claimed_at"],
+        )
 
     def query(
         self,

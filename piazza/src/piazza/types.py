@@ -32,3 +32,13 @@ class Message:
     def payload_json(self) -> dict:
         """Parse payload as JSON. Raises ValueError if not valid JSON."""
         return json.loads(self.payload)
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimResult:
+    """Result of a queue claim or ack operation."""
+
+    message: Message
+    status: str
+    claimed_by: str
+    claimed_at: str

@@ -12,7 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 from piazza_client.transport import HttpTransport
-from piazza_client.types import Message
+from piazza_client.types import ClaimResult, Message
 
 if TYPE_CHECKING:
     pass
@@ -236,3 +236,22 @@ class PiazzaClient:
 
     def notification_check(self) -> list[Message]:
         return self.channel_poll(f"_system:notifications:{self._agent_id}")
+
+    # ── Queue ─────────────────────────────────────────────────────
+
+    def queue_publish(
+        self,
+        channel: str,
+        content: str,
+        msg_type: str = "task",
+        metadata: dict | None = None,
+    ) -> str:
+        return self._transport.publish(
+            channel, self._agent_id, msg_type, content, metadata, queue=True
+        )
+
+    def queue_claim(self, channel: str) -> ClaimResult | None:
+        return self._transport.claim(channel, self._agent_id)
+
+    def queue_ack(self, message_id: str) -> ClaimResult | None:
+        return self._transport.ack(message_id, self._agent_id)
