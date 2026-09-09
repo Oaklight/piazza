@@ -94,3 +94,6 @@ invalid-method-override = "warn"
 paths = ["src"]
 exclude = ["src/mansio/_vendor"]
 max-complexity-allowed = 25
+
+[tool.zerodep]
+vendor-dir = "src/mansio/_vendor"
